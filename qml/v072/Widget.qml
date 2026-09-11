@@ -6,6 +6,7 @@ import qs.Commons
 import qs.Ui
 
 // Omarchy-native widget: running VM count, local uninstall, and compact actions.
+// Version the entry-point path so plugin updates bypass Omarchy's QML cache.
 // Full tasks run in a tiled terminal with persistent keyboard hints and progress.
 Panel {
   id: root

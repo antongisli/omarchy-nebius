@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "nebius",
   "name": "Nebius GPU",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "author": "Anton Smith",
   "license": "MIT",
   "description": "Need a bigger GPU? Find Nebius cloud GPU capacity, launch a VM for ComfyUI or vLLM, and SSH in from Omarchy. Codex and Claude Code supported.",
@@ -10,7 +10,7 @@
     "bar-widget"
   ],
   "entryPoints": {
-    "barWidget": "qml/v057/Widget.qml"
+    "barWidget": "qml/v072/Widget.qml"
   },
   "barWidget": {
     "displayName": "Nebius GPU",

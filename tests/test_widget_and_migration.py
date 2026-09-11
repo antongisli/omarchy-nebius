@@ -62,7 +62,8 @@ class SetupCompletionTests(unittest.TestCase):
 
 class WidgetCopyTests(unittest.TestCase):
     def test_expired_session_is_prominent_and_actionable(self):
-        widget = (Path(__file__).resolve().parents[1] / "qml/v057/Widget.qml").read_text()
+        entrypoint = json.loads((ROOT / "manifest.json").read_text())["entryPoints"]["barWidget"]
+        widget = (ROOT / entrypoint).read_text()
         self.assertIn("readonly property bool needsReconnect:", widget)
         self.assertIn('"Nebius session expired — reconnect required.', widget)
         self.assertIn('"RECONNECT"', widget)

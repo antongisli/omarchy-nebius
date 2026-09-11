@@ -43,6 +43,8 @@ Those three checks skip elsewhere. A successful unit-test run is not a live prov
 
 ## Contributing
 
+When releasing a widget change, move its QML entry point to a new versioned directory and update the manifest, offscreen test and preview imports. Omarchy 4.0.2 can retain a cached component at the old URL after `omarchy plugin update`; a new entry-point path loads the update without restarting the desktop shell.
+
 Open an issue or pull request with the behavior you want to change and its user-facing reason. Include reproduction steps for bugs. Keep credentials, account identifiers and private resource data out of issues and captures. Test consequential changes with synthetic responses before a live cloud trial.
 
 Use the system and terminal fonts, and retain arrows, j/k, Enter and Escape throughout. Brand accents must remain readable without changing the user's terminal palette. See [DESIGN.md](../DESIGN.md).
