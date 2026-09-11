@@ -15,7 +15,7 @@ import unittest
 
 
 class NativeTerminalTests(unittest.TestCase):
-    def exercise(self, scene, keys, width, height):
+    def exercise(self, scene, keys, width, height, ready_marker=b"PTY-test"):
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", height, width, 0, 0))
         process = subprocess.Popen([sys.executable, __file__, "--scene", scene], stdin=slave, stdout=slave, stderr=slave,
@@ -35,7 +35,7 @@ class NativeTerminalTests(unittest.TestCase):
                     if not chunk:
                         break
                     output += chunk
-                    if not sent and b"PTY-test" in output:
+                    if not sent and ready_marker in output:
                         os.write(master, keys)
                         sent = True
                 if process.poll() is not None:
@@ -63,6 +63,13 @@ class NativeTerminalTests(unittest.TestCase):
         self.assertIn("RESULT:cancelled", output)
         self.assertIn("Cancel", output)
 
+    def test_real_curses_p_switches_capacity_without_selecting_a_gpu(self):
+        for width, height in [(48, 20), (80, 24)]:
+            output = self.exercise("allocation", b"Pq", width, height, ready_marker=b"GPU capacity")
+            self.assertIn("RESULT:preemptible", output)
+            self.assertIn("On-demand", output)
+            self.assertIn("Preemptible", output)
+
 
 def scene(name):
     import curses
@@ -76,6 +83,13 @@ def scene(name):
              patch.object(app, "read", side_effect=AssertionError("Cloud reads are forbidden in a PTY test")):
             if name == "arrows":
                 return app.menu("PTY-test", [("One", "First VM", "one"), ("Two", "Second VM", "two")])
+            if name == "allocation":
+                app.capacity = {"source": "live", "offerings": [{
+                    "gpu_label": "H100", "gpu_count": 1, "region": "eu-north1",
+                    "on_demand": {"available": 8}, "preemptible": {"available": 0},
+                }]}
+                app.capacity_flow()
+                return app.allocation
             vm = {"id": "computeinstance-synthetic", "name": "PTY-test", "state": "running", "region": "eu-north1",
                   "allocation": "preemptible", "project_name": "synthetic", "managed": True, "can_delete": True}
             app.vm_actions(vm)

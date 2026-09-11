@@ -69,6 +69,7 @@ Omarchy's numbered panel shortcuts depend on the widget's position in your bar. 
 Use arrows or `j/k`, Enter, Escape/back, and `/` search throughout the terminal. Menus separate section headings, bold choices, and indented descriptions, with a full-width selection highlight and space between choices. `Home` / `End` select the first / last item; Page Up / Page Down scroll by a page. Press `?` for the selected item's complete text and all keyboard shortcuts. Long resource details wrap; review and JSON details preserve indentation. From the manager or N panel:
 
 - `C` — view current GPU capacity.
+- `P` — toggle the highlighted **On-demand / Preemptible** switch at the top of capacity, configuration and VM settings. Capacity views update immediately from the same snapshot; use `R` for fresh data.
 - `G` — choose a GPU family, select its region/configuration, choose project placement, review, and confirm creation.
 - `Shift+J` — search running VMs and connect (lowercase `j` moves down).
 - `V` — overview, connect, start/stop; explicitly delete plugin-owned VMs.

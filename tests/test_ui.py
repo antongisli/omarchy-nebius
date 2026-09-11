@@ -125,6 +125,48 @@ class KeyboardTests(unittest.TestCase):
         application.toggle_allocation()
         self.assertEqual(application.allocation, "preemptible")
 
+    def test_allocation_switch_is_at_top_and_highlights_only_selected_mode(self):
+        for width, height in [(48, 20), (80, 24), (120, 44)]:
+            for mode in ("on_demand", "preemptible"):
+                with self.subTest(width=width, mode=mode):
+                    application, screen = app(["\n"], width, height)
+                    application.allocation = mode
+                    application.menu("GPU capacity", [("H100", "8 available", "gpu")],
+                                     subtitle="Live snapshot", actions={"p": "toggle"})
+                    top = screen.frames[-1].splitlines()[3]
+                    self.assertIn("[ On-demand | Preemptible ]", top)
+                    self.assertIn("[P] switch", top)
+                    segments = [draw for draw in screen.draws if draw[0] == 3 and draw[2].strip() in ("On-demand", "Preemptible")]
+                    selected = [draw[2].strip() for draw in segments if draw[3] & curses.A_REVERSE]
+                    self.assertEqual(selected, [ui.allocation_label(mode)])
+                    self.assertIn("Live snapshot", screen.frames[-1])
+
+    def test_p_updates_capacity_for_both_modes_without_a_cloud_request(self):
+        for launch in (False, True):
+            application, screen = app(["P", "p", "q"], 48, 20)
+            application.capacity = {"source": "live", "offerings": [{
+                "gpu_label": "H100", "gpu_count": 1, "region": "eu-north1",
+                "on_demand": {"available": 8}, "preemptible": {"available": 0},
+            }]}
+            with patch.object(application, "read", side_effect=AssertionError("P must reuse the same capacity snapshot")), \
+                 patch.object(application, "mutate", side_effect=AssertionError("Switching must not mutate resources")):
+                application.capacity_flow(launch=launch)
+            self.assertIn("8 available", screen.frames[0])
+            self.assertIn("unavailable", screen.frames[1])
+            self.assertIn("8 available", screen.frames[2])
+            self.assertEqual(application.allocation, "on_demand")
+
+    def test_p_still_types_into_search_instead_of_switching_mode(self):
+        application, screen = app(["/", "p", "\n", "\n"], 48, 20)
+        self.assertEqual(application.menu("Capacity", [("GPU", "", "gpu")], actions={"p": "toggle"}), "gpu")
+        self.assertIn("Search: p", screen.frames[-1])
+        self.assertEqual(application.allocation, "on_demand")
+
+    def test_allocation_switch_is_absent_from_unrelated_menus(self):
+        application, screen = app(["\n"])
+        application.menu("Your VMs", [("VM", "Running", "vm")])
+        self.assertNotIn("Preemptible", screen.frames[-1])
+
     def test_long_rows_and_wide_characters_stay_inside_narrow_terminal(self):
         for width, height in [(48, 20), (80, 24), (120, 44)]:
             application, screen = app(["\n"], width, height)

@@ -77,7 +77,7 @@ Omarchy supplies the ordinary terminal tools used by setup, including Python, Ba
 | **S** | Set up or reconnect your account |
 | **U** | Uninstall Nebius plugin |
 
-Inside the terminal, use **arrows** or **j/k**, **Enter**, **Esc**, **/** to search, and **?** for help. **P** switches allocation mode where offered. The terminal manager uses **Shift+J** for Jump because lowercase **j** moves down.
+Inside the terminal, use **arrows** or **j/k**, **Enter**, **Esc**, **/** to search, and **?** for help. GPU menus show an **On-demand / Preemptible switch at the top**: **P** toggles the highlighted option and updates the displayed availability; **R** fetches a fresh capacity snapshot. The terminal manager uses **Shift+J** for Jump because lowercase **j** moves down.
 
 Before setup, the bar shows only the Nebius icon. After setup, a small **running VM count badge** appears on the icon: **0–9**, then **9+**, with the exact count in the tooltip. An unknown or stale count displays **?**, so failed refreshes never look like an empty account. Middle-click the icon to jump into a VM.
 

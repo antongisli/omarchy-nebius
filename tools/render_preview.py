@@ -7,6 +7,7 @@ The SVG is a cell-for-cell rendering of App.capacity_flow(), not a UI mockup.
 
 from __future__ import annotations
 
+import argparse
 import curses
 from html import escape
 from pathlib import Path
@@ -49,22 +50,23 @@ class PreviewScreen:
         raise FrameReady()
 
 
-def render(width=80, height=30):
+def render(width=80, height=30, allocation="on_demand"):
     screen = PreviewScreen(width, height)
     with patch.object(curses, "has_colors", return_value=False), patch.object(curses, "curs_set"):
         app = ui.App(screen)
     # Distinct attributes let the renderer preserve the production color roles.
     app.accent = 1 << 40
     app.selection = 1 << 41
+    app.allocation = allocation
     app.capacity = {"source": "live", "offerings": [
         {"gpu_label": label, "gpu_count": count, "region": region,
-         "on_demand": {"available": available}, "preemptible": {"available": available}}
-        for label, count, region, available in [
-            ("NVIDIA H100", 1, "eu-north1", 8),
-            ("NVIDIA H100", 8, "eu-west1", 2),
-            ("NVIDIA H200", 1, "eu-north1", 4),
-            ("NVIDIA H200", 8, "eu-west1", 1),
-            ("NVIDIA RTX 6000 Ada", 1, "uk-south2", 0),
+         "on_demand": {"available": available}, "preemptible": {"available": preemptible}}
+        for label, count, region, available, preemptible in [
+            ("NVIDIA H100", 1, "eu-north1", 8, 1),
+            ("NVIDIA H100", 8, "eu-west1", 2, 0),
+            ("NVIDIA H200", 1, "eu-north1", 4, 0),
+            ("NVIDIA H200", 8, "eu-west1", 1, 2),
+            ("NVIDIA RTX 6000 Ada", 1, "uk-south2", 0, 0),
         ]
     ]}
     with patch.object(app, "read", side_effect=AssertionError("Preview cannot query cloud")), \
@@ -94,6 +96,12 @@ def render(width=80, height=30):
 
 
 if __name__ == "__main__":
-    target = ROOT / "assets/terminal-preview.svg"
-    target.write_text(render(), encoding="utf-8")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--width", type=int, default=80)
+    parser.add_argument("--height", type=int, default=30)
+    parser.add_argument("--allocation", choices=("on_demand", "preemptible"), default="on_demand")
+    parser.add_argument("--output", type=Path, default=ROOT / "assets/terminal-preview.svg")
+    args = parser.parse_args()
+    target = args.output
+    target.write_text(render(args.width, args.height, args.allocation), encoding="utf-8")
     print(target)

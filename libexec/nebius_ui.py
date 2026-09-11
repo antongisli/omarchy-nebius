@@ -162,13 +162,32 @@ class App:
             hints.append(f"[{key}] {description}" if description else hint)
         return hints
 
-    def frame(self, title: str, subtitle="", footer="↑↓ / j k move   Enter select   / search   Esc back") -> int:
+    def allocation_switch(self, y: int, allocation: str):
+        """A compact segmented control; reverse video also works without color."""
+        x = 2
+        self.put(y, x, "[", self.accent)
+        x += 1
+        for index, mode in enumerate(("on_demand", "preemptible")):
+            if index:
+                self.put(y, x, "|", self.accent)
+                x += 1
+            label = " " + allocation_label(mode) + " "
+            attr = self.selection | curses.A_BOLD if allocation == mode else 0
+            self.put(y, x, label, attr)
+            x += cell_width(label)
+        self.put(y, x, "]", self.accent)
+        hint = "[P] switch" if self.screen.getmaxyx()[1] - x >= 14 else "[P]"
+        self.put(y, x + 3, hint, self.accent)
+
+    def frame(self, title: str, subtitle="", footer="↑↓ / j k move   Enter select   / search   Esc back", *, allocation=None) -> int:
         self.screen.erase()
         height, width = self.screen.getmaxyx()
         self.put(1, 2, "NEBIUS", self.selection | curses.A_BOLD)
         self.put(1, 11, "/ " + title, curses.A_BOLD)
-        self.put(3, 2, subtitle)
-        self.put(4, 2, "─" * max(0, width - 4), self.accent)
+        if allocation is not None:
+            self.allocation_switch(3, allocation)
+        self.put(4 if allocation is not None else 3, 2, subtitle)
+        self.put(5 if allocation is not None else 4, 2, "─" * max(0, width - 4), self.accent)
         foot = []
         for row in footer.splitlines():
             line = ""
@@ -209,12 +228,12 @@ class App:
             escape_hint = next((part for part in re.split(r"\s{2,}", hints) if part.startswith("Esc ")), "Esc back")
             enter_hint = next((part for part in re.split(r"\s{2,}", hints) if part.startswith("Enter ")), "Enter select")
             compact = "↑↓ / j k move   " + enter_hint + "   " + escape_hint
-            context_keys = (["P mode"] if "p" in actions else []) + (["G GPU"] if "g" in actions and title != "GPU manager" else [])
+            context_keys = (["P switch"] if "p" in actions else []) + (["G GPU"] if "g" in actions and title != "GPU manager" else [])
             context_keys += (["M actions"] if "m" in actions else []) + (["R refresh"] if "r" in actions else []) + ["/ search", "? help"]
             compact += "\n" + "   ".join(context_keys)
-            bottom = self.frame(title, subtitle, compact)
+            bottom = self.frame(title, subtitle, compact, allocation=self.allocation if "p" in actions else None)
             height, width = self.screen.getmaxyx()
-            y = 6
+            y = 7 if "p" in actions else 6
             note_lines = [line for note in notes for line in self.wrap(note, width - 8)]
             note_slots = max(0, min(3, bottom - y - 7))
             clipped_notes = len(note_lines) > note_slots
@@ -557,8 +576,8 @@ class App:
                 rows.append((label, f"{available(best[self.allocation])} · {','.join(map(str, shapes))} GPU shapes · {regions} regions", label))
             try:
                 chosen = self.menu("Get a GPU" if launch else "GPU capacity", rows,
-                    subtitle=f"{allocation_label(self.allocation)} · {self.snapshot_note(self.capacity)}",
-                    notes=["P switches allocation. Preemptible costs less and may be stopped by Nebius."] if self.allocation == "preemptible" else ["P switches allocation. On-demand uses regular PAYG capacity."],
+                    subtitle=self.snapshot_note(self.capacity),
+                    notes=["Preemptible costs less and may be stopped by Nebius."] if self.allocation == "preemptible" else ["On-demand uses regular PAYG capacity."],
                     actions={"p": "__allocation", "r": "__refresh"},
                     footer="↑↓ / j k move   Enter configurations   P allocation   R refresh   / search   Esc back")
                 if chosen == "__allocation":
@@ -579,7 +598,7 @@ class App:
                      f"{row['vcpu_count']} vCPU · {row['memory_gib']} GiB RAM\n"
                      f"On-demand: {available(row['on_demand'])}\nPreemptible: {available(row['preemptible'])}", row) for row in offerings]
             try:
-                row = self.menu("Configuration", rows, subtitle=allocation_label(self.allocation),
+                row = self.menu("Configuration", rows, subtitle=self.snapshot_note(self.capacity),
                     notes=["Regional capacity is not project eligibility. Choose GPU and region; preflight checks your project before allocation."],
                     actions={"p": "__allocation", "r": "__refresh"},
                     footer="↑↓ / j k move   Enter continue   P allocation   R refresh   / search   Esc GPU types")
