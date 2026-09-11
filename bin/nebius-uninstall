@@ -1,0 +1,245 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+readonly PLUGIN_ID="nebius"
+readonly PROFILE_NAME="omarchy-nebius-mcp"
+readonly SERVER_NAME="nebius"
+readonly PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${PLUGIN_ID}"
+readonly STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/nebius"
+readonly RECEIPT="$STATE_DIR/install-receipt.json"
+readonly SETUP_LOG="$STATE_DIR/setup.log"
+readonly CLI="$HOME/.nebius/bin/nebius"
+readonly CLI_CREDENTIALS="$HOME/.nebius/credentials.yaml"
+readonly CLI_SHA256="fd8c967cdfbd6c28f69979c87c1c8f9c52244219ed4981c48f9b40be314bed98"
+readonly CLI_SHA256_ARM64="91edf41c2ac03a551b84347c1fff739d55f32d968df184bc9b08e4780de71bb9"
+readonly SSH_KEY="$HOME/.ssh/nebius-ed25519"
+readonly BINDINGS="$HOME/.config/hypr/bindings.lua"
+readonly START_MARKER="-- >>> independent Nebius plugin shortcuts >>>"
+readonly END_MARKER="-- <<< independent Nebius plugin shortcuts <<<"
+
+assume_yes=false
+dry_run=false
+cli_policy="ask"
+ssh_key_policy="ask"
+
+usage() {
+  printf 'Usage: %s [--yes] [--dry-run] [--keep-cli|--remove-cli] [--keep-ssh-key|--remove-ssh-key]\n' "$0"
+}
+
+while (( $# > 0 )); do
+  case "$1" in
+    --yes|-y) assume_yes=true ;;
+    --dry-run) dry_run=true ;;
+    --keep-cli) cli_policy="keep" ;;
+    --remove-cli) cli_policy="remove" ;;
+    --keep-ssh-key) ssh_key_policy="keep" ;;
+    --remove-ssh-key) ssh_key_policy="remove" ;;
+    --help|-h) usage; exit 0 ;;
+    *) printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+owned() {
+  local key="$1"
+  [[ -f $RECEIPT ]] && [[ $(jq -r --arg key "$key" '.owned[$key] // false' "$RECEIPT" 2>/dev/null) == true ]]
+}
+
+legacy_installed() {
+  local text="$1"
+  [[ -f $SETUP_LOG ]] && grep -Fq "$text" "$SETUP_LOG"
+}
+
+uv_owned=false
+cli_owned=false
+owned uv && uv_owned=true
+owned cli && cli_owned=true
+legacy_installed "✓ Installed MCP runtime (" && uv_owned=true
+legacy_installed "✓ Installed and verified Nebius CLI 0.12.269" && cli_owned=true
+
+printf '\n  Uninstall Nebius plugin\n\n'
+printf '  This removes local setup:\n'
+printf '    • Omarchy widget and plugin files\n'
+printf '    • Local setup history and MCP cache\n'
+printf '    • Dedicated Nebius profile and browser token\n'
+printf '    • Codex and Claude Code MCP registrations\n'
+printf '    • Plugin shortcuts\n'
+if [[ $uv_owned == true ]]; then printf '    • uv installed by this plugin (sudo may ask for your password)\n'; fi
+if [[ $cli_owned == true && -x $CLI ]]; then
+  printf '\n  You can keep or remove the Nebius CLI.\n'
+  printf '  Keeping it makes reinstall faster; removing it repeats CLI setup.\n'
+fi
+if [[ -f $SSH_KEY || -f $SSH_KEY.pub ]]; then
+  printf '\n  You can keep or remove the dedicated SSH key.\n'
+  printf '  Keeping it preserves access for VMs that already use its public key.\n'
+  printf '  A new key created during reinstall will not unlock those existing VMs.\n'
+fi
+printf '\n  Cloud resources are left exactly as they are.\n'
+printf '  VMs, disks, projects, networks, and other Nebius resources are not\n'
+printf '  stopped or deleted. They may continue to incur charges.\n\n'
+
+if [[ $dry_run == true ]]; then
+  printf '  Preview only. Interactive uninstall asks about the CLI and SSH key.\n'
+  printf '  Nothing was changed.\n'
+  exit 0
+fi
+
+if [[ $assume_yes == true ]]; then
+  [[ $cli_policy == "ask" ]] && cli_policy="remove"
+  [[ $ssh_key_policy == "ask" ]] && ssh_key_policy="remove"
+else
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    printf 'Refusing non-interactive uninstall without --yes.\n' >&2
+    exit 1
+  fi
+
+  if [[ $cli_policy == "ask" && $cli_owned == true && -x $CLI ]]; then
+    cli_choice=$(printf '%s\n%s\n' \
+      "Keep Nebius CLI — reinstall will reuse it" \
+      "Remove Nebius CLI — reinstall will download it again" | gum choose \
+      --header="Keep the Nebius CLI?") || exit 0
+    [[ $cli_choice == Remove* ]] && cli_policy="remove" || cli_policy="keep"
+  fi
+  [[ $cli_policy == "ask" ]] && cli_policy="keep"
+
+  if [[ $ssh_key_policy == "ask" && ( -f $SSH_KEY || -f $SSH_KEY.pub ) ]]; then
+    ssh_choice=$(printf '%s\n%s\n' \
+      "Keep SSH key — preserve access to existing VMs" \
+      "Remove SSH key — existing VMs may become inaccessible" | gum choose \
+      --header="Keep the dedicated SSH key?") || exit 0
+    [[ $ssh_choice == Remove* ]] && ssh_key_policy="remove" || ssh_key_policy="keep"
+  fi
+  [[ $ssh_key_policy == "ask" ]] && ssh_key_policy="keep"
+
+  choice=$(printf '%s\n%s\n' "Cancel" "Remove local setup and plugin" | gum choose \
+    --header="Cloud resources will remain and may keep costing money" \
+    --cursor-prefix="› " --selected-prefix="✓ ") || exit 0
+  if [[ $choice != "Remove local setup and plugin" ]]; then
+    printf '\n  Uninstall cancelled. Nothing was changed.\n'
+    exit 0
+  fi
+fi
+
+mkdir -p "$STATE_DIR"
+exec 9>"$STATE_DIR/uninstall.lock"
+if ! flock -n 9; then
+  printf 'Nebius is busy. Wait for the current operation, then try again.\n' >&2
+  exit 1
+fi
+
+# Remove a system package first so a cancelled sudo prompt leaves all other
+# setup intact and the user can simply retry.
+if [[ $uv_owned == true ]] && pacman -Q uv >/dev/null 2>&1; then
+  omarchy-pkg-drop uv
+fi
+
+if command -v codex >/dev/null 2>&1; then
+  mcp_json=$(codex mcp get "$SERVER_NAME" --json 2>/dev/null || true)
+  if jq -e --arg path "$PLUGIN_DIR/libexec/nebius_agent_mcp.py" \
+      '(.transport.command // .command) == "python3" and (.transport.args // .args) == [$path]' \
+      >/dev/null 2>&1 <<<"$mcp_json"; then
+    codex mcp remove "$SERVER_NAME" >/dev/null
+  fi
+fi
+
+if command -v claude >/dev/null 2>&1 && [[ -f $HOME/.claude.json ]]; then
+  claude_mcp=$(jq -c --arg name "$SERVER_NAME" '.mcpServers[$name] // null' "$HOME/.claude.json" 2>/dev/null || true)
+  if jq -e --arg path "$PLUGIN_DIR/libexec/nebius_agent_mcp.py" \
+      '.type == "stdio" and .command == "python3" and .args == [$path]' \
+      >/dev/null 2>&1 <<<"$claude_mcp"; then
+    claude mcp remove "$SERVER_NAME" --scope user >/dev/null
+  fi
+fi
+
+if [[ -x $CLI ]] && "$CLI" profile list 2>/dev/null | sed -E 's/[[:space:]]+\[default\]$//' | grep -Fxq "$PROFILE_NAME"; then
+  active=$($CLI profile active 2>/dev/null || true)
+  if [[ $active == "$PROFILE_NAME" ]]; then
+    replacement=$($CLI profile list 2>/dev/null | sed -E 's/[[:space:]]+\[default\]$//' | grep -Fxv "$PROFILE_NAME" | head -n1 || true)
+    if [[ -n $replacement ]]; then
+      "$CLI" profile activate "$replacement" >/dev/null
+    else
+      # These files contain only the dedicated profile when it is the sole
+      # profile, so deleting them removes its config and browser token.
+      rm -f "$HOME/.nebius/config.yaml" "$HOME/.nebius/credentials.yaml"
+    fi
+  fi
+  if [[ -f $HOME/.nebius/config.yaml ]] && "$CLI" profile list 2>/dev/null \
+      | sed -E 's/[[:space:]]+\[default\]$//' | grep -Fxq "$PROFILE_NAME"; then
+    "$CLI" profile delete "$PROFILE_NAME" >/dev/null
+  fi
+fi
+
+# Nebius CLI profile deletion removes profile configuration but currently leaves
+# its cached federation token. Remove only this plugin's exact credential map
+# entry; preserve every other profile's credentials.
+if [[ -f $CLI_CREDENTIALS ]]; then
+  credential_header="    federation/auth.nebius.com//$PROFILE_NAME:"
+  credential_count=$(grep -Fxc -- "$credential_header" "$CLI_CREDENTIALS" || true)
+  if [[ $credential_count == 1 ]]; then
+    credentials_tmp=$(mktemp "${CLI_CREDENTIALS}.nebius-uninstall.XXXXXX")
+    awk -v header="$credential_header" '
+      $0 == header { removing = 1; next }
+      removing {
+        match($0, /^ */)
+        if ($0 != "" && RLENGTH <= 4) removing = 0
+      }
+      !removing { print }
+    ' "$CLI_CREDENTIALS" >"$credentials_tmp"
+    if grep -Eq '^    [^ ].*:$' "$credentials_tmp"; then
+      chmod 0600 "$credentials_tmp"
+      mv "$credentials_tmp" "$CLI_CREDENTIALS"
+    else
+      rm -f "$credentials_tmp" "$CLI_CREDENTIALS"
+    fi
+  elif [[ $credential_count -gt 1 ]]; then
+    printf 'Refusing to edit duplicated Nebius credential entries for %s.\n' "$PROFILE_NAME" >&2
+    exit 1
+  fi
+fi
+
+if [[ $ssh_key_policy == "remove" ]]; then
+  rm -f "$SSH_KEY" "$SSH_KEY.pub"
+fi
+
+if [[ -f $BINDINGS ]]; then
+  start_count=$(grep -Fxc -- "$START_MARKER" "$BINDINGS" || true)
+  end_count=$(grep -Fxc -- "$END_MARKER" "$BINDINGS" || true)
+  if [[ $start_count == 1 && $end_count == 1 ]]; then
+    bindings_tmp=$(mktemp "${BINDINGS}.nebius-uninstall.XXXXXX")
+    awk -v start="$START_MARKER" -v end="$END_MARKER" '
+      $0 == start { removing = 1; next }
+      removing && $0 == end { removing = 0; next }
+      !removing { print }
+    ' "$BINDINGS" >"$bindings_tmp"
+    mv "$bindings_tmp" "$BINDINGS"
+    hyprctl reload >/dev/null 2>&1 || true
+  fi
+fi
+
+if [[ $cli_policy == "remove" && $cli_owned == true && -x $CLI ]]; then
+  installed_sha=$(sha256sum "$CLI" | cut -d' ' -f1)
+  if [[ $installed_sha == "$CLI_SHA256" || $installed_sha == "$CLI_SHA256_ARM64" ]]; then
+    rm -f "$CLI"
+    rmdir "$HOME/.nebius/bin" 2>/dev/null || true
+  else
+    printf '  Kept Nebius CLI because it no longer matches the plugin-installed binary.\n'
+  fi
+fi
+
+rm -rf -- "$STATE_DIR"
+
+remove_output=$(omarchy plugin remove "$PLUGIN_ID" --yes)
+printf '%s\n' "$remove_output"
+plugin_backup=$(sed -n 's/^Removed nebius\. Backup at: //p' <<<"$remove_output")
+case "$plugin_backup" in
+  "$HOME/.config/omarchy/plugins/.nebius.bak."*) rm -rf -- "$plugin_backup" ;;
+esac
+for old_backup in "$HOME/.config/omarchy/plugins"/.nebius.bak.*; do
+  [[ -e $old_backup ]] && rm -rf -- "$old_backup"
+done
+
+printf '\n  Local Nebius plugin setup removed. Cloud resources were not changed.\n'
+[[ $cli_policy == "keep" && -x $CLI ]] && printf '  Kept the Nebius CLI for reuse.\n'
+[[ $ssh_key_policy == "keep" && ( -f $SSH_KEY || -f $SSH_KEY.pub ) ]] && printf '  Kept the dedicated SSH key and access it provides.\n'
+printf '  Reinstall the plugin to run the complete setup again.\n'

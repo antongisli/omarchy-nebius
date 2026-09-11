@@ -1,0 +1,24 @@
+name: Checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - name: Validate manifest and syntax
+        run: |
+          python3 -m json.tool manifest.json >/dev/null
+          for script in bin/*; do bash -n "$script"; done
+          python3 -m compileall -q libexec tests tools
+      - name: Run tests without cloud access
+        run: python3 -m unittest discover -s tests -v

@@ -1,0 +1,272 @@
+#!/usr/bin/env bash
+
+set -u -o pipefail
+
+readonly EXPECTED_CLI_VERSION="0.12.269"
+readonly MCP_COMMIT="6388bf779acdd331d9b2016230b37f8bf7177e12"
+readonly STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/nebius"
+readonly SETUP_STATE="$STATE_DIR/setup.json"
+readonly AUTH_MARKER="$STATE_DIR/account-ok"
+readonly PROJECT_MARKER="$STATE_DIR/project-ok"
+readonly CAPACITY_CACHE="$STATE_DIR/capacity.json"
+readonly OPERATION_FILE="$STATE_DIR/operation.json"
+readonly MCP_MARKER="$STATE_DIR/mcp-$MCP_COMMIT-ok"
+readonly CLI="$HOME/.nebius/bin/nebius"
+readonly BRIDGE="$HOME/.config/omarchy/plugins/nebius/libexec/nebius_mcp_bridge.py"
+readonly CORE="$HOME/.config/omarchy/plugins/nebius/libexec/nebius_core.py"
+readonly CODEX_MCP="$HOME/.config/omarchy/plugins/nebius/libexec/nebius_codex_mcp.py"
+readonly CLAUDE_MCP="$HOME/.config/omarchy/plugins/nebius/libexec/nebius_claude_mcp.py"
+readonly SSH_KEY="$HOME/.ssh/nebius-ed25519"
+readonly PROFILE_NAME="omarchy-nebius-mcp"
+readonly CLI_CONFIG="$HOME/.nebius/config.yaml"
+readonly CLI_CREDENTIALS="$HOME/.nebius/credentials.yaml"
+
+profile_block() {
+  [[ -f $CLI_CONFIG ]] || return 0
+  awk -v profile="$PROFILE_NAME" '
+    $0 == "    " profile ":" { inside = 1; next }
+    inside && /^    [^ ]/ { exit }
+    inside { print }
+  ' "$CLI_CONFIG"
+}
+
+profile_is_browser_auth() {
+  local block
+  block=$(profile_block)
+  grep -Eq '^[[:space:]]+auth-type:[[:space:]]+federation[[:space:]]*$' <<<"$block" &&
+    ! grep -Eqi 'service-account|(^|/)\.other-tool(/|$)' <<<"$block"
+}
+
+profile_field() {
+  local field="$1"
+  profile_block | awk -v field="$field" '$1 == field ":" { print $2; exit }'
+}
+
+credentials_are_current() {
+  local expiry
+  [[ -f $CLI_CREDENTIALS ]] || return 1
+  expiry=$(awk -v profile="$PROFILE_NAME" '
+    index($0, "//" profile ":") { inside = 1; next }
+    inside && /^    [^ ]/ { exit }
+    inside && $1 == "expires_at:" { print $2; exit }
+  ' "$CLI_CREDENTIALS")
+  [[ $expiry =~ ^[0-9]+$ ]] && (( expiry > $(date +%s) + 30 ))
+}
+
+probe=0
+json=0
+for argument in "$@"; do
+  case "$argument" in
+  --probe) probe=1 ;;
+  --json) json=1 ;;
+  -h | --help)
+    echo "Usage: nebius-status [--probe] [--json]"
+    exit 0
+    ;;
+  *)
+    echo "nebius-status: unknown option: $argument" >&2
+    exit 2
+    ;;
+  esac
+done
+
+mkdir -p "$STATE_DIR"
+
+uv_ready=false
+uv_detail="Not installed"
+if command -v uvx >/dev/null 2>&1; then
+  uv_ready=true
+  uv_detail=$(uvx --version 2>/dev/null | awk 'NR == 1 {print $1, $2}')
+  [[ -n $uv_detail ]] || uv_detail="Installed"
+fi
+
+cli_ready=false
+cli_detail="Not installed"
+if [[ -x $CLI ]]; then
+  cli_detail=$($CLI version 2>/dev/null | head -n1)
+  if [[ $cli_detail == "$EXPECTED_CLI_VERSION" ]]; then
+    cli_ready=true
+  elif [[ -n $cli_detail ]]; then
+    cli_detail="$cli_detail · expected $EXPECTED_CLI_VERSION"
+  else
+    cli_detail="Could not run"
+  fi
+fi
+
+account_ready=false
+account_detail="Not connected"
+if [[ -x $CLI ]] && profile_is_browser_auth; then
+  if credentials_are_current; then
+    : >"$AUTH_MARKER"
+  else
+    rm -f "$AUTH_MARKER"
+  fi
+  if [[ -f $AUTH_MARKER ]]; then
+    account_ready=true
+    account_detail="Independent profile"
+  else
+    account_detail="Reconnect required"
+  fi
+fi
+
+project_ready=false
+project_detail="Not discovered"
+if (( probe )) && [[ $account_ready == true ]]; then
+  capacity_temp=$(mktemp "$STATE_DIR/.capacity.XXXXXX")
+  if timeout 180s python3 "$CORE" capacity >"$capacity_temp" 2>/dev/null && jq -e '.offerings | type == "array"' "$capacity_temp" >/dev/null; then
+    project_count=$(jq '.projects | length' "$capacity_temp")
+    rm -f "$capacity_temp"
+    printf '%s\n' "$project_count" >"$PROJECT_MARKER"
+  else
+    rm -f "$capacity_temp"
+  fi
+fi
+if [[ $account_ready == true && -s $PROJECT_MARKER && -s $CAPACITY_CACHE ]] && jq -e . "$CAPACITY_CACHE" >/dev/null 2>&1; then
+  project_ready=true
+  project_count=$(cat "$PROJECT_MARKER")
+  hidden_count=$(jq '.hidden_shared_project_count // 0' "$CAPACITY_CACHE")
+  project_detail="$project_count yours · $hidden_count hidden"
+elif [[ $account_ready == true ]]; then
+  project_detail="Needs discovery"
+fi
+
+capacity_source="$CAPACITY_CACHE"
+operation_source="$OPERATION_FILE"
+fallback_capacity=""
+fallback_operation=""
+if [[ ! -s $capacity_source ]] || ! jq -e . "$capacity_source" >/dev/null 2>&1; then
+  fallback_capacity=$(mktemp "$STATE_DIR/.capacity-empty.XXXXXX")
+  printf '%s\n' '{"projects":[],"offerings":[]}' >"$fallback_capacity"
+  capacity_source="$fallback_capacity"
+fi
+if [[ ! -s $operation_source ]] || ! jq -e . "$operation_source" >/dev/null 2>&1; then
+  fallback_operation=$(mktemp "$STATE_DIR/.operation-empty.XXXXXX")
+  printf '%s\n' '{"phase":"idle","message":"No VM activity yet"}' >"$fallback_operation"
+  operation_source="$fallback_operation"
+fi
+trap '[[ -n $fallback_capacity ]] && rm -f "$fallback_capacity"; [[ -n $fallback_operation ]] && rm -f "$fallback_operation"' EXIT
+
+mcp_ready=false
+mcp_detail="Not installed"
+if (( probe )) && [[ $uv_ready == true && $cli_ready == true && $account_ready == true ]]; then
+  if timeout 90s python3 "$BRIDGE" health >/dev/null 2>&1; then
+    : >"$MCP_MARKER"
+  else
+    rm -f "$MCP_MARKER"
+  fi
+fi
+if [[ $account_ready == true && -f $MCP_MARKER ]]; then
+  mcp_ready=true
+  mcp_detail="Pinned · healthy"
+elif [[ $uv_ready == true ]]; then
+  mcp_detail="Not verified"
+fi
+
+ssh_ready=false
+ssh_detail="Not created"
+if [[ -f $SSH_KEY && -f $SSH_KEY.pub ]] && [[ $(stat -c '%a' "$SSH_KEY" 2>/dev/null) == 600 ]]; then
+  ssh_ready=true
+  ssh_detail="Dedicated key"
+fi
+
+agent_ready=false
+agent_detail="No Codex or Claude Code agent"
+agent_names=()
+for agent_spec in "Codex|$CODEX_MCP" "Claude Code|$CLAUDE_MCP"; do
+  agent_name=${agent_spec%%|*}
+  agent_script=${agent_spec#*|}
+  agent_status=$(python3 "$agent_script" status 2>/dev/null || true)
+  if [[ -n $agent_status ]] && jq -e '.ready == true' >/dev/null 2>&1 <<<"$agent_status"; then
+    agent_names+=("$agent_name")
+  fi
+done
+if (( ${#agent_names[@]} > 0 )); then
+  agent_ready=true
+  if (( ${#agent_names[@]} == 2 )); then
+    agent_detail="Codex + Claude Code"
+  else
+    agent_detail="${agent_names[0]}"
+  fi
+fi
+
+phase="idle"
+stage=""
+message="Ready to set up"
+if [[ -s $SETUP_STATE ]] && jq -e . "$SETUP_STATE" >/dev/null 2>&1; then
+  phase=$(jq -r '.phase // "idle"' "$SETUP_STATE")
+  stage=$(jq -r '.stage // ""' "$SETUP_STATE")
+  message=$(jq -r '.message // ""' "$SETUP_STATE")
+fi
+
+ready=false
+if [[ $cli_ready == true && $account_ready == true && $project_ready == true && $ssh_ready == true ]]; then
+  ready=true
+  if [[ $phase != running ]]; then
+    phase="ready"
+    stage="done"
+    message="Nebius is ready"
+  fi
+elif [[ $phase == ready ]]; then
+  phase="idle"
+  if [[ $account_detail == "Reconnect required" ]]; then
+    stage="account"
+    message="Nebius account session expired"
+  else
+    stage=""
+    message="Setup needs attention"
+  fi
+fi
+
+payload=$(jq -cn \
+  --arg phase "$phase" \
+  --arg stage "$stage" \
+  --arg message "$message" \
+  --arg uv_detail "$uv_detail" \
+  --arg cli_detail "$cli_detail" \
+  --arg account_detail "$account_detail" \
+  --arg project_detail "$project_detail" \
+  --arg mcp_detail "$mcp_detail" \
+  --arg ssh_detail "$ssh_detail" \
+  --arg agent_detail "$agent_detail" \
+  --argjson ready "$ready" \
+  --argjson uv_ready "$uv_ready" \
+  --argjson cli_ready "$cli_ready" \
+  --argjson account_ready "$account_ready" \
+  --argjson project_ready "$project_ready" \
+  --argjson mcp_ready "$mcp_ready" \
+  --argjson ssh_ready "$ssh_ready" \
+  --argjson agent_ready "$agent_ready" \
+  --slurpfile capacity "$capacity_source" \
+  --slurpfile operation "$operation_source" \
+  '{
+    schema: "nebius.omarchy-status/v1",
+    phase: $phase,
+    stage: $stage,
+    message: $message,
+    ready: $ready,
+    uv: {ready: $uv_ready, detail: $uv_detail},
+    cli: {ready: $cli_ready, detail: $cli_detail},
+    account: {ready: $account_ready, detail: $account_detail},
+    project: {ready: $project_ready, detail: $project_detail},
+    mcp: {ready: $mcp_ready, detail: $mcp_detail},
+    ssh: {ready: $ssh_ready, detail: $ssh_detail},
+    agent: {ready: $agent_ready, detail: $agent_detail},
+    capacity: ($capacity[0] // {projects: [], offerings: []}),
+    operation: ($operation[0] // {phase: "idle", message: "No VM activity yet"})
+  }')
+
+if (( json )); then
+  printf '%s\n' "$payload"
+else
+  jq -r '
+    "Nebius setup", "",
+    "MCP runtime     " + .uv.detail,
+    "Nebius CLI     " + .cli.detail,
+    "Nebius account " + .account.detail,
+    "Projects       " + .project.detail,
+    "Nebius MCP     " + .mcp.detail,
+    "SSH access     " + .ssh.detail,
+    "Agent tools    " + .agent.detail,
+    "", .message
+  ' <<<"$payload"
+fi

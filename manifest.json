@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "nebius",
+  "name": "Nebius GPU",
+  "version": "0.7.0",
+  "author": "Anton Smith",
+  "license": "MIT",
+  "description": "Need a bigger GPU? Find Nebius cloud GPU capacity, launch a VM for ComfyUI or vLLM, and SSH in from Omarchy. Codex and Claude Code supported.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "qml/v057/Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "Nebius GPU",
+    "description": "Compare GPU availability, prefer your own projects, create regional placement when needed, and track every outcome.",
+    "category": "Development",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

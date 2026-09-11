@@ -1,0 +1,331 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+readonly CLI_VERSION="0.12.269"
+readonly CLI_SHA256_X86_64="fd8c967cdfbd6c28f69979c87c1c8f9c52244219ed4981c48f9b40be314bed98"
+readonly CLI_SHA256_ARM64="91edf41c2ac03a551b84347c1fff739d55f32d968df184bc9b08e4780de71bb9"
+readonly CLI_BASE_URL="https://storage.eu-north1.nebius.cloud/cli/release/$CLI_VERSION/linux"
+readonly MCP_COMMIT="6388bf779acdd331d9b2016230b37f8bf7177e12"
+readonly STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/nebius"
+readonly SETUP_STATE="$STATE_DIR/setup.json"
+readonly AUTH_MARKER="$STATE_DIR/account-ok"
+readonly PROJECT_MARKER="$STATE_DIR/project-ok"
+readonly CAPACITY_CACHE="$STATE_DIR/capacity.json"
+readonly MCP_MARKER="$STATE_DIR/mcp-$MCP_COMMIT-ok"
+readonly LOG_FILE="$STATE_DIR/setup.log"
+readonly INSTALL_RECEIPT="$STATE_DIR/install-receipt.json"
+readonly CLI="$HOME/.nebius/bin/nebius"
+readonly BRIDGE="$HOME/.config/omarchy/plugins/nebius/libexec/nebius_mcp_bridge.py"
+readonly CORE="$HOME/.config/omarchy/plugins/nebius/libexec/nebius_core.py"
+readonly CODEX_MCP="$HOME/.config/omarchy/plugins/nebius/libexec/nebius_codex_mcp.py"
+readonly CLAUDE_MCP="$HOME/.config/omarchy/plugins/nebius/libexec/nebius_claude_mcp.py"
+readonly PROFILE_NAME="omarchy-nebius-mcp"
+readonly CLI_CONFIG="$HOME/.nebius/config.yaml"
+readonly CLI_CREDENTIALS="$HOME/.nebius/credentials.yaml"
+
+mkdir -p "$STATE_DIR"
+touch "$LOG_FILE"
+
+if [[ ! -f $INSTALL_RECEIPT ]]; then
+  jq -n '{schema: "nebius.omarchy-install-receipt/v1", owned: {uv: false, cli: false, profile: false, ssh_key: false, codex_mcp: false, claude_mcp: false}}' >"$INSTALL_RECEIPT"
+fi
+
+mark_owned() {
+  local key="$1"
+  local temp_receipt
+  temp_receipt=$(mktemp "$STATE_DIR/.receipt.XXXXXX")
+  jq --arg key "$key" '.owned[$key] = true' "$INSTALL_RECEIPT" >"$temp_receipt"
+  mv "$temp_receipt" "$INSTALL_RECEIPT"
+}
+
+exec 9>"$STATE_DIR/setup.lock"
+if ! flock -n 9; then
+  echo "Nebius MCP setup is already running."
+  exit 0
+fi
+
+stage="starting"
+temp_dir=""
+previous_active=""
+
+write_state() {
+  local phase="$1"
+  local current_stage="$2"
+  local message="$3"
+  local temp_state
+  temp_state=$(mktemp "$STATE_DIR/.setup.XXXXXX")
+  jq -cn \
+    --arg phase "$phase" \
+    --arg stage "$current_stage" \
+    --arg message "$message" \
+    --arg updated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{phase: $phase, stage: $stage, message: $message, updatedAt: $updated_at}' >"$temp_state"
+  mv "$temp_state" "$SETUP_STATE"
+}
+
+say() {
+  printf '%s\n' "$1"
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" >>"$LOG_FILE"
+}
+
+profile_block() {
+  [[ -f $CLI_CONFIG ]] || return 0
+  awk -v profile="$PROFILE_NAME" '
+    $0 == "    " profile ":" { inside = 1; next }
+    inside && /^    [^ ]/ { exit }
+    inside { print }
+  ' "$CLI_CONFIG"
+}
+
+profile_exists() {
+  profile_block | grep -q '[^[:space:]]'
+}
+
+profile_is_browser_auth() {
+  local block
+  block=$(profile_block)
+  grep -Eq '^[[:space:]]+auth-type:[[:space:]]+federation[[:space:]]*$' <<<"$block" &&
+    ! grep -Eqi 'service-account|(^|/)\.other-tool(/|$)' <<<"$block"
+}
+
+credentials_are_current() {
+  local expiry
+  [[ -f $CLI_CREDENTIALS ]] || return 1
+  expiry=$(awk -v profile="$PROFILE_NAME" '
+    index($0, "//" profile ":") { inside = 1; next }
+    inside && /^    [^ ]/ { exit }
+    inside && $1 == "expires_at:" { print $2; exit }
+  ' "$CLI_CREDENTIALS")
+  [[ $expiry =~ ^[0-9]+$ ]] && (( expiry > $(date +%s) + 30 ))
+}
+
+ensure_tenant_selected() {
+  local tenant_id tenants rows count selected
+  tenant_id=$($CLI --profile "$PROFILE_NAME" config get tenant-id 2>/dev/null || true)
+  [[ $tenant_id == tenant-* ]] && return 0
+
+  say "● Choose the Nebius tenant whose projects Nebius may use"
+  tenants=$(timeout 60s "$CLI" --profile "$PROFILE_NAME" --no-browser --no-progress --timeout 30s \
+    iam tenant list --all --format json)
+  rows=$(jq -r '.items[] | [.metadata.name, .metadata.id] | @tsv' <<<"$tenants")
+  count=$(grep -c '[^[:space:]]' <<<"$rows")
+  (( count > 0 ))
+  if (( count == 1 )); then
+    selected=$rows
+  else
+    selected=$(printf '%s\n' "$rows" | fzf \
+      --delimiter=$'\t' --with-nth=1,2 --layout=reverse --border --height=70% --prompt='Tenant > ')
+  fi
+  tenant_id=$(cut -f2 <<<"$selected")
+  [[ $tenant_id == tenant-* ]]
+  "$CLI" --profile "$PROFILE_NAME" config set tenant-id "$tenant_id" >/dev/null
+  rm -f "$PROJECT_MARKER" "$CAPACITY_CACHE"
+}
+
+cleanup() {
+  if [[ -n $temp_dir && -d $temp_dir ]]; then
+    rm -f "$temp_dir/nebius"
+    rmdir "$temp_dir" 2>/dev/null || true
+  fi
+  if [[ -n $previous_active && $previous_active != "$PROFILE_NAME" ]]; then
+    "$CLI" profile activate "$previous_active" >/dev/null 2>&1 || true
+    previous_active=""
+  fi
+}
+
+on_error() {
+  local exit_code=$?
+  trap - ERR
+  cleanup
+  write_state "error" "$stage" "Setup stopped at $stage. Open details, then repair setup."
+  say "✗ Setup stopped during: $stage"
+  say "  Repair is safe to run again."
+  printf '\nPress any key to close.\n'
+  read -r -n 1 -s || true
+  exit "$exit_code"
+}
+
+trap cleanup EXIT
+trap on_error ERR
+
+clear
+printf '\n  Setting up Nebius\n\n'
+write_state "running" "uv" "Installing the MCP runtime"
+
+stage="uv"
+if command -v uvx >/dev/null 2>&1; then
+  say "✓ MCP runtime already installed ($(uvx --version | head -n1))"
+else
+  say "● Installing MCP runtime"
+  say "  Omarchy may ask for your password to install Arch package: uv"
+  omarchy-pkg-add uv
+  command -v uvx >/dev/null 2>&1
+  mark_owned uv
+  say "✓ Installed MCP runtime ($(uvx --version | head -n1))"
+fi
+
+stage="cli"
+write_state "running" "$stage" "Installing the verified Nebius CLI"
+installed_version=""
+if [[ -x $CLI ]]; then
+  installed_version=$($CLI version 2>/dev/null | head -n1 || true)
+fi
+if [[ $installed_version == "$CLI_VERSION" ]]; then
+  say "✓ Nebius CLI $CLI_VERSION already installed"
+else
+  case "$(uname -m)" in
+  x86_64 | amd64)
+    cli_arch="x86_64"
+    cli_sha256="$CLI_SHA256_X86_64"
+    ;;
+  arm64 | aarch64)
+    cli_arch="arm64"
+    cli_sha256="$CLI_SHA256_ARM64"
+    ;;
+  *)
+    say "Unsupported CPU architecture: $(uname -m)"
+    false
+    ;;
+  esac
+
+  say "● Installing Nebius CLI $CLI_VERSION"
+  temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/nebius.XXXXXX")
+  curl -fL --retry 5 --retry-delay 1 \
+    "$CLI_BASE_URL/$cli_arch/nebius" \
+    -o "$temp_dir/nebius"
+  printf '%s  %s\n' "$cli_sha256" "$temp_dir/nebius" | sha256sum -c -
+  chmod 0755 "$temp_dir/nebius"
+  [[ $($temp_dir/nebius version) == "$CLI_VERSION" ]]
+  mkdir -p "$HOME/.nebius/bin"
+  install -m 0755 "$temp_dir/nebius" "$CLI"
+  mark_owned cli
+  say "✓ Installed and verified Nebius CLI $CLI_VERSION"
+fi
+
+stage="account"
+write_state "running" "$stage" "Connecting your Nebius account"
+if profile_is_browser_auth; then
+  say "● Checking your independent Nebius account"
+elif profile_exists; then
+  say "Profile '$PROFILE_NAME' exists but is not an official browser-auth profile."
+  say "Remove or rename it, then run setup again."
+  false
+else
+  previous_active=$($CLI profile active 2>/dev/null || true)
+  say "● Preparing a dedicated Nebius profile"
+  "$CLI" profile create "$PROFILE_NAME" \
+    --skip-auth \
+    --endpoint api.nebius.cloud \
+    --federation-endpoint auth.nebius.com
+  mark_owned profile
+  profile_is_browser_auth
+  if [[ -n $previous_active && $previous_active != "$PROFILE_NAME" ]]; then
+    "$CLI" profile activate "$previous_active"
+    previous_active=""
+  fi
+fi
+
+if ! credentials_are_current; then
+  rm -f "$AUTH_MARKER"
+  say "● Connect your Nebius account in the browser"
+  say "  Complete the official Nebius prompt; setup resumes automatically."
+  timeout 15m "$CLI" --profile "$PROFILE_NAME" --no-progress iam get-access-token >/dev/null
+fi
+credentials_are_current
+: >"$AUTH_MARKER"
+say "✓ Independent Nebius account profile connected"
+ensure_tenant_selected
+
+stage="project"
+write_state "running" "$stage" "Finding your projects and regional GPU options"
+say "● Finding your projects and regional GPU capacity"
+capacity_temp=$(mktemp "$STATE_DIR/.capacity.XXXXXX")
+python3 "$CORE" capacity --refresh >"$capacity_temp"
+project_count=$(jq '.projects | length' "$capacity_temp")
+shared_count=$(jq '.hidden_shared_project_count // 0' "$capacity_temp")
+rm -f "$capacity_temp"
+printf '%s\n' "$project_count" >"$PROJECT_MARKER"
+if (( project_count == 0 )); then
+  say "✓ No personal project yet; Nebius will offer to create one in the chosen GPU region"
+else
+  say "✓ Found $project_count project(s) created by you; $shared_count shared project(s) hidden"
+fi
+
+stage="mcp"
+write_state "running" "$stage" "Downloading and testing the pinned Nebius MCP"
+say "● Downloading and testing Nebius MCP"
+timeout 240s python3 "$BRIDGE" health --refresh >/dev/null
+: >"$MCP_MARKER"
+say "✓ Nebius MCP pinned and healthy"
+
+stage="ssh"
+write_state "running" "$stage" "Creating the dedicated Nebius SSH key"
+say "● Preparing a dedicated SSH key"
+ssh_key_existed=false
+[[ -f $HOME/.ssh/nebius-ed25519 && -f $HOME/.ssh/nebius-ed25519.pub ]] && ssh_key_existed=true
+python3 "$CORE" ensure-key >/dev/null
+[[ $ssh_key_existed == false ]] && mark_owned ssh_key
+say "✓ Dedicated SSH key ready"
+
+stage="agent"
+write_state "running" "$stage" "Checking Omarchy agents and adding constrained Nebius tools"
+say "● Checking Omarchy agent setup"
+default_agent=$(omarchy-default-agent 2>/dev/null || true)
+agent_count=0
+agent_names=()
+
+agent_list() {
+  if (( ${#agent_names[@]} == 2 )); then
+    printf 'Codex + Claude Code'
+  elif (( ${#agent_names[@]} == 1 )); then
+    printf '%s' "${agent_names[0]}"
+  fi
+}
+
+if command -v codex >/dev/null 2>&1; then
+  agent_count=$((agent_count + 1))
+  agent_existed=false
+  python3 "$CODEX_MCP" status 2>/dev/null | jq -e '.ready == true' >/dev/null 2>&1 && agent_existed=true
+  python3 "$CODEX_MCP" ensure >/dev/null
+  [[ $agent_existed == false ]] && mark_owned codex_mcp
+  agent_names+=("Codex")
+  if codex login status >/dev/null 2>&1; then
+    say "✓ Codex tools registered and signed in"
+  else
+    say "○ Codex tools registered; sign in before using natural-language actions"
+  fi
+fi
+
+if command -v claude >/dev/null 2>&1; then
+  agent_count=$((agent_count + 1))
+  agent_existed=false
+  python3 "$CLAUDE_MCP" status 2>/dev/null | jq -e '.ready == true' >/dev/null 2>&1 && agent_existed=true
+  python3 "$CLAUDE_MCP" ensure >/dev/null
+  [[ $agent_existed == false ]] && mark_owned claude_mcp
+  agent_names+=("Claude Code")
+  if claude auth status 2>/dev/null | jq -e '.loggedIn == true' >/dev/null 2>&1; then
+    say "✓ Claude Code tools registered and signed in"
+  else
+    say "○ Claude Code tools registered; sign in before using natural-language actions"
+  fi
+fi
+
+if (( agent_count == 0 )); then
+  say "○ No supported agent installed; choose Codex or Claude Code in Omarchy to add natural-language actions"
+  say "  Keyboard controls remain fully available."
+elif [[ $default_agent != codex && $default_agent != claude ]]; then
+  say "○ Omarchy's default agent is not Codex or Claude Code"
+  say "  Nebius tools are registered with: $(agent_list)."
+else
+  say "✓ Omarchy default agent: $default_agent"
+fi
+
+stage="done"
+write_state "ready" "$stage" "Nebius is ready"
+say ""
+say "✓ Nebius is ready"
+if (( agent_count > 0 )); then
+  say "  Open a new $(agent_list) session to load the constrained Nebius tools."
+fi
+say "  The plugin uses $CLI directly and does not edit your shell profile."

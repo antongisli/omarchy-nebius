@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.impeccable/
+# Local development history and desktop captures contain machine-specific context.
+PLAN.md
+.DS_Store
+.env
+.env.*
