@@ -30,13 +30,21 @@ Panel {
   property double lastCountRequestMs: 0
   property double clockMs: Date.now()
   property bool pollingEnabled: true
-  readonly property bool countCurrent: vmCount.state === "current" && typeof vmCount.count === "number"
+  readonly property bool countVisible: ready || snapshot.setup_complete === true
+  readonly property bool countCurrent: ready && vmCount.state === "current" && typeof vmCount.count === "number"
     && vmCount.count >= 0 && isFinite(Date.parse(vmCount.checked_at)) && clockMs - Date.parse(vmCount.checked_at) < 90000
-  readonly property string countLabel: countCurrent ? String(vmCount.count) : "?"
-  readonly property string countSummary: countCurrent ? vmCount.count + " running VM" + (vmCount.count === 1 ? "" : "s") : "Running VM count unavailable"
+  readonly property string countLabel: !countVisible ? "" : countCurrent ? String(vmCount.count) : "?"
+  readonly property string badgeLabel: countCurrent && vmCount.count > 9 ? "9+" : countLabel
+  readonly property string countSummary: !countVisible ? "Set up Nebius" : countCurrent ? vmCount.count + " running VM" + (vmCount.count === 1 ? "" : "s") : "Running VM count unavailable"
   readonly property bool ready: snapshot.ready === true
   readonly property bool busy: snapshot.operation && snapshot.operation.phase === "running"
   readonly property bool needsReconnect: snapshot.account && snapshot.account.detail === "Reconnect required"
+  readonly property string barTooltip: !countVisible
+    ? "Nebius · Set up Nebius\nOpen the panel and press S to connect your account."
+    : (needsReconnect ? "Nebius session expired — reconnect required\n" : "Nebius · ")
+      + countSummary + "\nRunning VMs in your visible personal projects"
+      + (countCurrent ? " · checked within 90s" : "\n" + (vmCount.detail || "Refresh needed"))
+      + (busy ? "\nOperation in progress" : "")
   readonly property var actions: ready ? [
     { key: "G", title: "Get a GPU VM", screen: "get" },
     { key: "J", title: "Jump into a VM", screen: "jump" },
@@ -63,7 +71,7 @@ Panel {
 
   function refresh(forceCount) {
     clockMs = Date.now()
-    if (!countProc.running && (forceCount === true || clockMs - lastCountRequestMs >= 30000)) {
+    if (ready && !countProc.running && (forceCount === true || clockMs - lastCountRequestMs >= 30000)) {
       lastCountRequestMs = clockMs
       countProc.running = true
     }
@@ -71,6 +79,7 @@ Panel {
     statusProc.command = [root.pluginRoot + "/bin/nebius-status", "--json"]
     statusProc.running = true
   }
+  onReadyChanged: if (ready && pollingEnabled) refresh(true)
   function launch(screen) {
     root.close()
     if (screen === "setup") {
@@ -132,7 +141,7 @@ Panel {
       waitForEnd: true
       onStreamFinished: {
         try { root.snapshot = JSON.parse(text) }
-        catch (error) { root.snapshot = { ready: false, account: {}, operation: {message: "Status unavailable. Open account setup."} } }
+        catch (error) { root.snapshot = { ready: false, setup_complete: root.countVisible, account: {}, operation: {message: "Status unavailable. Open account setup."} } }
       }
     }
   }
@@ -151,7 +160,7 @@ Panel {
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
     function refresh(): string { root.refresh(true); return "ok" }
-    function status(): string { return JSON.stringify(Object.assign({}, root.snapshot, {vms: root.vmCount, vm_count_label: root.countLabel})) }
+    function status(): string { return JSON.stringify(Object.assign({}, root.snapshot, {vms: root.vmCount, vm_count_label: root.countLabel, vm_count_visible: root.countVisible, vm_badge_label: root.badgeLabel})) }
     function setup(): string { root.launch("setup"); return "ok" }
     function gpu(): string { root.launch("get"); return "ok" }
     function jump(): string { root.launch("jump"); return "ok" }
@@ -159,7 +168,7 @@ Panel {
     function capacity(): string { root.launch("capacity"); return "ok" }
     function uninstall(): string { root.launch("uninstall"); return "ok" }
   }
-  WidgetButton {
+  BarIconButton {
     id: button
     anchors.fill: parent
     bar: root.bar
@@ -167,43 +176,44 @@ Panel {
     activeColor: root.accent
     foreground: root.foreground
     fontFamily: root.fontFamily
-    fontSize: Style.font.body
-    text: "Nebius " + root.countLabel
-    labelVisible: false
-    fixedWidth: vertical ? barSize : brandMark.width + Style.space(7) + countText.implicitWidth + scaledHorizontalMargin * 2
-    fixedHeight: vertical ? brandMark.height + countText.implicitHeight + Style.space(5) + scaledVerticalPadding * 2 : barSize
-    Image {
-      id: brandMark
-      source: "../../assets/nebius-icon.svg"
-      width: Style.space(22)
-      height: width
-      sourceSize.width: width * 2
-      sourceSize.height: height * 2
-      anchors.left: button.vertical ? undefined : parent.left
-      anchors.leftMargin: button.scaledHorizontalMargin
-      anchors.horizontalCenter: button.vertical ? parent.horizontalCenter : undefined
-      anchors.top: button.vertical ? parent.top : undefined
-      anchors.topMargin: button.scaledVerticalPadding
-      anchors.verticalCenter: button.vertical ? undefined : parent.verticalCenter
+    text: root.countVisible ? "Nebius " + root.countLabel : "Nebius"
+    useActiveColor: false
+    slotSize: Math.max(Style.bar.iconSlot, Style.space(28))
+    opticalSize: Style.space(26)
+    iconComponent: Component {
+      Item {
+        Image {
+          anchors.centerIn: parent
+          source: "../../assets/nebius-icon.svg"
+          width: Style.space(22)
+          height: width
+          sourceSize.width: width * 2
+          sourceSize.height: height * 2
+        }
+        Rectangle {
+          objectName: "vmCountBadge"
+          visible: root.countVisible
+          anchors.right: parent.right
+          anchors.bottom: parent.bottom
+          width: Style.space(14)
+          height: width
+          radius: width / 2
+          color: root.accent
+          border.width: 1
+          border.color: root.brandInk
+          Text {
+            anchors.centerIn: parent
+            text: root.badgeLabel
+            color: root.brandInk
+            font.family: root.fontFamily
+            font.pixelSize: Style.space(9)
+            font.bold: true
+            renderType: Text.NativeRendering
+          }
+        }
+      }
     }
-    Text {
-      id: countText
-      text: root.countLabel
-      color: root.foreground
-      font.family: root.fontFamily
-      font.pixelSize: Style.font.body
-      font.bold: true
-      anchors.left: button.vertical ? undefined : brandMark.right
-      anchors.leftMargin: Style.space(7)
-      anchors.horizontalCenter: button.vertical ? parent.horizontalCenter : undefined
-      anchors.top: button.vertical ? brandMark.bottom : undefined
-      anchors.topMargin: Style.space(5)
-      anchors.verticalCenter: button.vertical ? undefined : parent.verticalCenter
-    }
-    tooltipText: (root.needsReconnect ? "Nebius session expired — reconnect required\n" : "Nebius · ")
-      + root.countSummary + "\nRunning VMs in your visible personal projects"
-      + (root.countCurrent ? " · checked within 90s" : "\n" + (root.vmCount.detail || "Refresh needed"))
-      + (root.busy ? "\nOperation in progress" : "")
+    tooltipText: root.barTooltip
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.MiddleButton) root.launch("jump")
       else root.toggle()

@@ -79,7 +79,7 @@ Omarchy supplies the ordinary terminal tools used by setup, including Python, Ba
 
 Inside the terminal, use **arrows** or **j/k**, **Enter**, **Esc**, **/** to search, and **?** for help. **P** switches allocation mode where offered. The terminal manager uses **Shift+J** for Jump because lowercase **j** moves down.
 
-The bar shows your **running VM count**. An unknown or stale count displays **?**, so failed refreshes never look like an empty account. Middle-click the icon to jump into a VM.
+Before setup, the bar shows only the Nebius icon. After setup, a small **running VM count badge** appears on the icon: **0–9**, then **9+**, with the exact count in the tooltip. An unknown or stale count displays **?**, so failed refreshes never look like an empty account. Middle-click the icon to jump into a VM.
 
 For direct desktop shortcuts, add the optional [Super+Ctrl+G/J/M bindings](config/keybindings.lua) after checking for conflicts with your existing bindings.
 

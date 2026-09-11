@@ -40,7 +40,7 @@ The installer is re-runnable and does not edit `.zshrc`. It uses each agent's ow
 - Failed boot-disk deletion stays visible as **disk remains**, with a cleanup retry action. Delete is limited to plugin-registered resources.
 - Select a saved boot disk to reuse, inspect, or permanently delete it. Cleanup requires explicit confirmation and live checks for ownership, attachments (including stopped VMs), locks, readiness and deletion protection. Nothing is deleted automatically.
 - VM actions include **Disks and storage**, manual start/stop and confirmed deletion.
-- The bar widget shows the Nebius symbol beside `5` for five running VMs in the same visible personal projects as **Your VMs**, including pre-existing VMs. Stopped VMs, failed requests and saved disks are not counted. Background refresh runs about every 30 seconds; unknown, partial, failed or older-than-90-second results display `?`, never a false zero. The tooltip and open panel explain the count. `R` refreshes it immediately.
+- The bar widget shows a small badge over the Nebius symbol: `0`–`9`, then `9+`, with the exact running VM count in the tooltip. It covers the same visible personal projects as **Your VMs**, including pre-existing VMs. Stopped VMs, failed requests and saved disks are not counted. Before setup completes, the badge is hidden and no VM polling runs. After setup, background refresh runs about every 30 seconds while connected; unknown, partial, failed or older-than-90-second results display `?`, never a false zero. Expired sessions retain the `?` badge with reconnect guidance. `R` refreshes it immediately.
 
 Stopped VMs stop incurring compute charges, but their disks remain billable until deleted.
 

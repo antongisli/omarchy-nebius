@@ -54,13 +54,18 @@ write_state() {
   local current_stage="$2"
   local message="$3"
   local temp_state
+  local completed=false
+  if [[ $phase == ready ]] || jq -e '.completed == true or .phase == "ready"' "$SETUP_STATE" >/dev/null 2>&1; then
+    completed=true
+  fi
   temp_state=$(mktemp "$STATE_DIR/.setup.XXXXXX")
   jq -cn \
     --arg phase "$phase" \
     --arg stage "$current_stage" \
     --arg message "$message" \
+    --argjson completed "$completed" \
     --arg updated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{phase: $phase, stage: $stage, message: $message, updatedAt: $updated_at}' >"$temp_state"
+    '{phase: $phase, stage: $stage, message: $message, completed: $completed, updatedAt: $updated_at}' >"$temp_state"
   mv "$temp_state" "$SETUP_STATE"
 }
 

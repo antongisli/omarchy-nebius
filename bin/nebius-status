@@ -190,12 +190,14 @@ if (( ${#agent_names[@]} > 0 )); then
 fi
 
 phase="idle"
+setup_complete=false
 stage=""
 message="Ready to set up"
 if [[ -s $SETUP_STATE ]] && jq -e . "$SETUP_STATE" >/dev/null 2>&1; then
   phase=$(jq -r '.phase // "idle"' "$SETUP_STATE")
   stage=$(jq -r '.stage // ""' "$SETUP_STATE")
   message=$(jq -r '.message // ""' "$SETUP_STATE")
+  setup_complete=$(jq -r '.completed == true or .phase == "ready"' "$SETUP_STATE")
 fi
 
 ready=false
@@ -229,6 +231,7 @@ payload=$(jq -cn \
   --arg ssh_detail "$ssh_detail" \
   --arg agent_detail "$agent_detail" \
   --argjson ready "$ready" \
+  --argjson setup_complete "$setup_complete" \
   --argjson uv_ready "$uv_ready" \
   --argjson cli_ready "$cli_ready" \
   --argjson account_ready "$account_ready" \
@@ -244,6 +247,7 @@ payload=$(jq -cn \
     stage: $stage,
     message: $message,
     ready: $ready,
+    setup_complete: $setup_complete,
     uv: {ready: $uv_ready, detail: $uv_detail},
     cli: {ready: $cli_ready, detail: $cli_detail},
     account: {ready: $account_ready, detail: $account_detail},
