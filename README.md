@@ -31,7 +31,7 @@ Out of VRAM in **ComfyUI**? Trying a bigger model with **vLLM** or **Open WebUI*
 - 🤖 **Ask your agent.** Nebius tools for both Codex and Claude Code.
 - 🛡️ **Review before launch.** Preflight checks, price estimates and confirmation before creating resources.
 
-You get a **CUDA-ready Ubuntu VM**; you install the apps and models. Choose your GPU first, then a personal project—or create one with an editable suggested name.
+Start with a **CUDA-ready Ubuntu VM**; you install the apps and models. Choose your GPU first, then a personal project—or create one with an editable suggested name.
 
 In **VM settings → Boot image**, choose the default Ubuntu/CUDA family or an
 existing public or custom image your account can access in that region. Custom
@@ -43,6 +43,13 @@ RTX PRO 6000 and L40S variants share one GPU entry. Configurations with the same
 GPU count, CPU and RAM are combined; the plugin picks an available compatible
 variant for your project. Different machine sizes remain separate choices.
 
+## 👋 New to Nebius?
+
+1. [Create your account](https://console.nebius.com/).
+2. [Set up billing](https://docs.nebius.com/signup-billing/sign-up) in the Nebius console.
+3. Install below, then choose **Set up Nebius** to authorize the plugin in your browser.
+
+Account signup and plugin authorization are separate steps. Cloud resources are billed to your Nebius account; launches depend on quota and availability.
 
 <a id="install"></a>
 
@@ -60,7 +67,7 @@ omarchy plugin add https://github.com/antongisli/omarchy-nebius --enable
 
 Setup installs **uv**, a checksum-verified **Nebius CLI**, pinned **official Nebius MCP**, and a dedicated SSH key. Package installation may ask for your password. [Setup details →](docs/reference.md#what-setup-does)
 
-[Create an account](https://console.nebius.com/) · [GPU pricing](https://nebius.com/prices)
+[GPU pricing →](https://nebius.com/prices)
 
 ## ⌨️ Hit a key
 
@@ -69,11 +76,11 @@ From the Nebius panel:
 | Key | Action | Key | Action |
 | --- | --- | --- | --- |
 | **G** | Get a GPU | **P** | Port forwarding |
-| **J** | Jump into a VM | **A** | Activity |
+| **Shift+J** | Jump into a VM | **A** | Activity |
 | **V** | Your VMs | **S** | Set up / reconnect |
 | **C** | GPU capacity | **U** | Uninstall plugin |
 
-Navigate with **arrows / j/k**, **Enter** and **Esc**. **/** searches; **?** shows help. In the terminal, Jump is **Shift+J**. In GPU menus, **P** switches allocation type.
+Navigate with **arrows / j/k**, **Enter** and **Esc**. **/** searches; **?** shows help. **Shift+J** opens Jump in both the panel and terminal. In GPU menus, **P** switches allocation type.
 
 **Super+Ctrl+M** opens Nebius after setup, wherever its icon sits. Change it with **Shift+K · Shortcuts** in the panel or manager: arrows choose modifiers, type a key, Enter saves. Occupied keys are left alone. Optional [direct GPU / SSH bindings →](config/keybindings.lua)
 

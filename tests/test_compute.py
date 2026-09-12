@@ -114,6 +114,9 @@ class ComputeTests(unittest.TestCase):
                 self.assertEqual(request["spec"]["recovery_policy"], "FAIL")
             self.assertEqual(request["spec"]["boot_disk"]["attach_mode"], "READ_WRITE")
             interface = request["spec"]["network_interfaces"][0]
+            # The API name is used for cloud-init's guest interface rename.
+            # "default" passed ProtoJSON validation but broke first-boot networking.
+            self.assertEqual(interface["name"], "eth0")
             self.assertEqual(interface["public_ip_address"], {"static": True})
             self.assertEqual(len(interface["security_groups"]), 1)
 
