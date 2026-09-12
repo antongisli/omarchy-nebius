@@ -476,6 +476,7 @@ def sync_personal_projects(
 
 
 def _discover_gpu_capacity() -> dict[str, Any]:
+    from nebius_catalog import gpu_name
     tenants_value = run_cli(["iam", "tenant", "list", "--all", "--format", "json"], timeout=20)
     selected_tenant_id = profile_value("tenant-id")
     if not re.fullmatch(r"tenant-[a-z0-9-]+", selected_tenant_id):
@@ -554,6 +555,10 @@ def _discover_gpu_capacity() -> dict[str, Any]:
                 except NebiusError as error:
                     errors.append({"scope": project["project_id"], "message": str(error)})
                     continue
+                project["preemptible_platforms"] = {
+                    str(row.get("metadata", {}).get("name")): row.get("status", {}).get("allowed_for_preemptibles")
+                    for row in platform_items
+                }
                 project["platforms"] = sorted(
                     str(row.get("metadata", {}).get("name"))
                     for row in platform_items
@@ -592,7 +597,7 @@ def _discover_gpu_capacity() -> dict[str, Any]:
             region = str(spec.get("region") or "")
             compatible = [
                 {
-                    key: project[key]
+                    **{key: project[key]
                     for key in (
                         "tenant_id",
                         "tenant_name",
@@ -601,7 +606,8 @@ def _discover_gpu_capacity() -> dict[str, Any]:
                         "region",
                         "subnet_id",
                         "subnet_name",
-                    )
+                    )},
+                    "allowed_for_preemptibles": project.get("preemptible_platforms", {}).get(platform),
                 }
                 for project in projects
                 if project["tenant_id"] == tenant_id
@@ -624,7 +630,7 @@ def _discover_gpu_capacity() -> dict[str, Any]:
                     "region": region,
                     "fabric": spec.get("fabric"),
                     "platform": platform,
-                    "gpu_label": platform.removeprefix("gpu-").replace("-", " ").upper(),
+                    "gpu_label": gpu_name(platform),
                     "preset": preset.get("name"),
                     "gpu_count": resources.get("gpu_count"),
                     "vcpu_count": resources.get("vcpu_count"),
@@ -649,7 +655,7 @@ def _discover_gpu_capacity() -> dict[str, Any]:
     projects.sort(key=lambda project: (str(project["project_name"]).lower(), project["project_id"]))
     personal_projects = [project for project in projects if project.get("personal")]
     clean_projects = [
-        {key: value for key, value in project.items() if key not in {"platforms", "labels", "personal"}}
+        {key: value for key, value in project.items() if key not in {"platforms", "preemptible_platforms", "labels", "personal"}}
         for project in personal_projects
     ]
     result = {
@@ -702,6 +708,7 @@ def preflight_vm(
     subnet_id: str = "",
     vm_name: str = "",
     image_family: str = "",
+    image_id: str = "",
 ) -> dict[str, Any]:
     """Read-only admission checks. Capacity advice is not project eligibility."""
     if allocation not in {"on_demand", "preemptible"} or disk_gib < 0 or gpu_count < 1:
@@ -747,15 +754,22 @@ def preflight_vm(
                     warnings.append("Live capacity is unreported; Nebius can only confirm it at submission.")
                 else:
                     check("Live capacity", True, "Capacity is currently reported; it is not reserved")
-            if image_family:
-                catalog = capability.get("metadata", {}).get("parent_id")
-                if not catalog:
-                    raise NebiusError("The platform's image catalog could not be identified")
-                image = run_cli(["compute", "image", "get-latest-by-family", "--parent-id", catalog,
-                                 "--image-family", image_family, "--format", "json"], timeout=25)
+            if image_id or image_family:
+                if image_id:
+                    from nebius_catalog import get_image, compatibility
+                    shape = {"platform": platform, "preset": preset, "region": region}
+                    image = get_image(image_id, shape)
+                    _, notes = compatibility(image, shape)
+                    warnings.extend(notes)
+                else:
+                    catalog = capability.get("metadata", {}).get("parent_id")
+                    if not catalog:
+                        raise NebiusError("The platform's image catalog could not be identified")
+                    image = run_cli(["compute", "image", "get-latest-by-family", "--parent-id", catalog,
+                                     "--image-family", image_family, "--format", "json"], timeout=25)
                 check("Boot image", image.get("status", {}).get("state") == "READY"
-                      and int(image.get("status", {}).get("min_disk_size_bytes") or 0) <= DEFAULT_DISK_GIB * 1024**3,
-                      "The boot image must be READY and fit the boot disk")
+                      and int(image.get("status", {}).get("min_disk_size_bytes") or 0) <= disk_gib * 1024**3,
+                      "The boot image must be readable, READY and fit the boot disk")
             if subnet_id:
                 subnets = _items(run_cli(["vpc", "subnet", "list", "--parent-id", project_id,
                                          "--all", "--format", "json"], timeout=25))
@@ -961,7 +975,7 @@ def _availability_score(allocation: dict[str, Any]) -> tuple[int, int]:
 
 
 def _hourly_estimate(platform: str, gpu_count: int, vcpu_count: int, memory_gib: int,
-                     allocation: str = "preemptible") -> float | None:
+                     allocation: str = "preemptible", disk_gib: int = DEFAULT_DISK_GIB) -> float | None:
     gpu_price = (PREEMPTIBLE_GPU_USD if allocation == "preemptible" else ON_DEMAND_GPU_USD).get(platform)
     if gpu_price is None:
         return None
@@ -971,7 +985,7 @@ def _hourly_estimate(platform: str, gpu_count: int, vcpu_count: int, memory_gib:
         compute += multiplier * (0.006 * vcpu_count + 0.0016 * memory_gib)
     elif platform == "gpu-l40s-d":
         compute += multiplier * (0.005 * vcpu_count + 0.0016 * memory_gib)
-    disk = DEFAULT_DISK_GIB * DISK_USD_PER_GIB_MONTH / 730
+    disk = disk_gib * DISK_USD_PER_GIB_MONTH / 730
     return round(compute + disk, 3)
 
 
@@ -989,11 +1003,15 @@ def plan_gpu_vm(
     project_id: str | None = None,
     allocation: str = "on_demand",
     auto_stop_hours: int = 0,
+    image_id: str = "",
+    disk_gib: int | None = None,
 ) -> dict[str, Any]:
     if allocation not in {"preemptible", "on_demand"}:
         raise NebiusError("Choose on_demand or preemptible allocation")
     if auto_stop_hours != 0:
         raise NebiusError("Auto-stop has been removed. Reopen the manager and review a new plan. VMs run until stopped manually.")
+    if disk_gib is not None and (type(disk_gib) is not int or not 50 <= disk_gib <= 30720):
+        raise NebiusError("Boot disk size must be between 50 and 30720 GiB")
     capacity = gpu_capacity()
     candidates = [
         offering
@@ -1039,6 +1057,19 @@ def plan_gpu_vm(
     created_at = dt.datetime.now(dt.timezone.utc)
     expires_at = created_at + dt.timedelta(minutes=10)
     gpu_count = int(selected.get("gpu_count") or 1)
+    boot_image = {"label": IMAGE_FAMILY, "note": "Public Ubuntu / CUDA image family"}
+    if image_id:
+        from nebius_catalog import get_image, image_row
+        image = get_image(image_id, selected)
+        details = image_row(image, [selected], image["metadata"]["parent_id"])
+        minimum = details["min_disk_gib"]
+        if disk_gib is None:
+            disk_gib = max(DEFAULT_DISK_GIB, minimum)
+        if disk_gib < minimum or disk_gib > 30720:
+            raise NebiusError(f"This image requires at least {minimum} GiB of boot disk storage")
+        boot_image = {"label": details["name"], "image_id": image_id,
+                      "note": "; ".join(details["warnings"]) or "Declared compatible by image metadata"}
+    disk_gib = disk_gib if disk_gib is not None else DEFAULT_DISK_GIB
     plan = {
         "schema": "nebius.omarchy-plan/v1",
         "plan_id": secrets.token_urlsafe(18),
@@ -1057,8 +1088,10 @@ def plan_gpu_vm(
         "capacity": selected[allocation],
         "subnet_id": project["subnet_id"],
         "subnet_name": project["subnet_name"],
-        "image_family": IMAGE_FAMILY,
-        "disk_gib": DEFAULT_DISK_GIB,
+        "image_family": "" if image_id else IMAGE_FAMILY,
+        "image_id": image_id,
+        "boot_image": boot_image,
+        "disk_gib": disk_gib,
         "ssh_user": SSH_USER,
         "ssh_public_key": str(SSH_KEY.with_suffix(".pub")),
         "network_note": "Static public IPv4; inbound TCP 22 only. Outbound traffic is allowed. Use Ports for local application access.",
@@ -1069,6 +1102,7 @@ def plan_gpu_vm(
             int(selected.get("vcpu_count") or 0),
             int(selected.get("memory_gib") or 0),
             allocation,
+            disk_gib,
         ),
         "pricing_url": PRICING_URL,
         "pricing_checked_at": PRICING_CHECKED_AT,
@@ -1077,9 +1111,10 @@ def plan_gpu_vm(
     plan["reusable_disk"] = _select_reusable_disk(plan)
     plan["preflight"] = preflight_vm(
         project["region"], allocation, str(selected["platform"]), gpu_count, project_id=project["project_id"],
-        disk_gib=0 if plan["reusable_disk"] else DEFAULT_DISK_GIB,
+        disk_gib=0 if plan["reusable_disk"] else plan["disk_gib"],
         preset=plan["preset"], subnet_id=plan["subnet_id"], vm_name=vm_name,
         image_family="" if plan["reusable_disk"] else plan["image_family"],
+        image_id="" if plan["reusable_disk"] else plan["image_id"],
     )
     PLAN_DIR.mkdir(parents=True, exist_ok=True)
     PLAN_DIR.chmod(0o700)
@@ -1218,7 +1253,9 @@ def _known_create_rejection(plan: dict[str, Any], error: str) -> bool:
 def _select_reusable_disk(plan: dict[str, Any]) -> dict[str, Any] | None:
     for saved in sorted(_reusable_disks(), key=lambda item: item.get("saved_at", "")):
         if (saved["project"]["project_id"] == plan["project"]["project_id"]
-                and saved["image_family"] == plan["image_family"] and saved["disk_gib"] == plan["disk_gib"]):
+                and saved.get("image_family", "") == plan.get("image_family", "")
+                and saved.get("image_id", "") == plan.get("image_id", "")
+                and saved["disk_gib"] == plan["disk_gib"]):
             _verify_reusable_disk(saved)
             return saved
     return None
@@ -1228,7 +1265,8 @@ def _release_rejected_launch(plan: dict[str, Any], error: str) -> dict[str, Any]
     """Preserve disk and evidence after a verified rejection; never delete it."""
     saved = plan.get("reusable_disk") or {
         "disk_id": plan["disk_id"], "name": plan["name"] + "-boot", "project": plan["project"],
-        "source_request_id": plan["plan_id"], "image_family": plan["image_family"], "disk_gib": plan["disk_gib"],
+        "source_request_id": plan["plan_id"], "image_family": plan["image_family"],
+        "image_id": plan.get("image_id", ""), "disk_gib": plan["disk_gib"],
     }
     disk = _verify_reusable_disk(saved)
     saved = {**saved, "state": "available", "saved_at": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -1285,6 +1323,7 @@ def _vm_record(plan, vm_id, disk_id):
         "id": vm_id, "disk_id": disk_id, "name": plan["name"],
         "project_id": plan["project"]["project_id"], "region": plan["project"]["region"],
         "platform": plan["platform"], "preset": plan["preset"], "allocation": plan["allocation"],
+        "image_id": plan.get("image_id", ""), "image_family": plan.get("image_family", ""),
         "ssh_user": SSH_USER, "created_at": plan["submitted_at"],
         "source_request_id": (plan.get("reusable_disk") or {}).get("source_request_id", plan["plan_id"]),
     }
@@ -1460,8 +1499,8 @@ def _disk_arguments(plan: dict[str, Any]) -> list[str]:
         str(plan["disk_gib"]),
         "--type",
         "network_ssd",
-        "--source-image-family-image-family",
-        plan["image_family"],
+        "--source-image-id" if plan.get("image_id") else "--source-image-family-image-family",
+        plan.get("image_id") or plan["image_family"],
         "--block-size-bytes",
         "4096",
         "--format",
@@ -1535,9 +1574,10 @@ def create_gpu_vm(plan_id: str, *, dry_run: bool = False) -> dict[str, Any]:
     try:
         plan["preflight"] = preflight_vm(
             planned_project["region"], plan["allocation"], plan["platform"], plan["gpu_count"],
-            project_id=planned_project["project_id"], disk_gib=0 if reusable else DEFAULT_DISK_GIB,
+            project_id=planned_project["project_id"], disk_gib=0 if reusable else plan["disk_gib"],
             preset=plan["preset"], subnet_id=plan["subnet_id"], vm_name=plan["name"],
             image_family="" if reusable else plan["image_family"],
+            image_id="" if reusable else plan.get("image_id", ""),
         )
         _require_preflight(plan["preflight"])
         ensure_ssh_key()
@@ -2097,10 +2137,15 @@ def parse_args() -> argparse.Namespace:
     project_create.add_argument("--confirmed", action="store_true")
     project_create.add_argument("--dry-run", action="store_true")
     sub.add_parser("ensure-key")
+    images = sub.add_parser("images")
+    images.add_argument("--offering-id", action="append", required=True)
+    images.add_argument("--project-id", required=True)
     plan = sub.add_parser("plan")
     plan.add_argument("--name")
     plan.add_argument("--offering-id")
     plan.add_argument("--project-id")
+    plan.add_argument("--image-id", default="")
+    plan.add_argument("--disk-gib", type=int)
     plan.add_argument("--allocation", choices=("on_demand", "preemptible"), default="on_demand")
     plan.add_argument("--auto-stop-hours", type=int, default=0, help=argparse.SUPPRESS)
     preflight = sub.add_parser("preflight")
@@ -2162,8 +2207,12 @@ def main() -> int:
         elif args.command == "ensure-key":
             ensure_ssh_key()
             value = {"private_key": str(SSH_KEY), "public_key": str(SSH_KEY.with_suffix('.pub'))}
+        elif args.command == "images":
+            from nebius_catalog import list_images
+            value = list_images(args.offering_id, args.project_id)
         elif args.command == "plan":
-            value = plan_gpu_vm(args.name, args.offering_id, args.project_id, args.allocation, args.auto_stop_hours)
+            value = plan_gpu_vm(args.name, args.offering_id, args.project_id, args.allocation,
+                                args.auto_stop_hours, args.image_id, args.disk_gib)
         elif args.command == "preflight":
             value = preflight_vm(args.region, args.allocation, args.platform, args.gpu_count, project_id=args.project_id, preset=args.preset)
         elif args.command == "create":
@@ -2203,4 +2252,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # Catalog helpers share this CLI instance, including its exception type.
+    sys.modules["nebius_core"] = sys.modules[__name__]
     raise SystemExit(main())
