@@ -1437,6 +1437,7 @@ def _instance_request(plan: dict[str, Any], disk_id: str, *, cloud_init: str | N
             "boot_disk": {"attach_mode": "READ_WRITE", "existing_disk": {"id": disk_id}},
             "network_interfaces": [
                 {
+                    # Required guest NIC name, not a label: "default" breaks IPv4 setup.
                     "name": "eth0",
                     "subnet_id": plan["subnet_id"],
                     "ip_address": {},
