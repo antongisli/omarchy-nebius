@@ -1707,6 +1707,22 @@ def list_managed_vms() -> dict[str, Any]:
     return {"vms": result, "errors": errors}
 
 
+def ssh_identity_for_instance(item: dict[str, Any]) -> str:
+    # Cloud provenance survives reinstall; local mutation ownership does not.
+    labels = item.get("metadata", {}).get("labels") or {}
+    return "nebius" if labels.get("managed-by") == MANAGED_BY else "default"
+
+
+def ssh_identity_options(connection: dict[str, Any]) -> list[str]:
+    if connection.get("managed"):
+        return ["-o", "IdentitiesOnly=yes", "-i", str(SSH_KEY)]
+    if connection.get("ssh_identity") == "nebius" and SSH_KEY.is_file():
+        # Offer the retained key without excluding an existing agent/config.
+        # Never generate a replacement key or adopt a VM merely to log in.
+        return ["-i", str(SSH_KEY)]
+    return []
+
+
 def _vm_summary(item: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
     metadata, spec, status = (item.get(key, {}) for key in ("metadata", "spec", "status"))
     vm_id = str(metadata.get("id") or "")
@@ -1735,6 +1751,7 @@ def _vm_summary(item: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]
         "allocation": "preemptible" if spec.get("preemptible") else "on_demand",
         "public_ip": public_ip, "private_ip": private_ip, "ssh_user": username,
         "managed": managed, "can_delete": managed, "recovery_id": recovery_id,
+        "ssh_identity": ssh_identity_for_instance(item),
     }
 
 
@@ -2033,8 +2050,7 @@ def connect_vm(vm_id: str, *, launch: bool = True, username: str | None = None) 
         "-o",
         "ServerAliveInterval=30",
     ]
-    if vm.get("managed"):
-        command += ["-o", "IdentitiesOnly=yes", "-i", str(SSH_KEY)]
+    command += ssh_identity_options(vm)
     command += [f"{username}@{address}"]
     if launch:
         try:

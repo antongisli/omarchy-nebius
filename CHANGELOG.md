@@ -1,5 +1,11 @@
 # Release notes
 
+## 0.7.9 · 2026-09-12 · SSH after reinstall
+
+- SSH and port forwarding offer the retained Nebius key for VMs labelled as created by this plugin, even after uninstall has removed the local VM registry.
+- SSH identity is separate from management ownership: reconnecting does not adopt a VM or unlock deletion. Unrelated VMs retain their normal SSH configuration and agent.
+- Existing saved forwards recover the identity from live VM metadata. No keys are regenerated and no cloud resources are changed.
+
 ## 0.7.8 · 2026-09-12 · Configurable keyboard shortcut
 
 - A dedicated Super+Ctrl+M shortcut opens Nebius independently of bar position. Setup only installs it when free and respects a saved or disabled choice.

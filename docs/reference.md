@@ -91,6 +91,12 @@ Use arrows or `j/k`, Enter, Escape/back, and `/` search throughout the terminal.
 
 For natural-language use, choose Codex or Claude Code in Omarchy, sign in to that agent, and start a new agent session to load the updated tools. Ask “show GPU capacity” or “get me a VM and put me in it.” The agent presents GPU choices before project placement, shows the plan, asks for a normal confirmation, and relies on write-tool approval instead of a typed magic phrase.
 
+## SSH after reinstall
+
+Keep the dedicated SSH key when uninstalling to retain access to existing VMs. SSH and port forwarding offer that key again for VMs carrying this plugin's creation label, even without a local VM record. Your configured SSH agent remains available for these older VMs; unrelated VMs use their normal SSH configuration.
+
+Connecting does not adopt a VM or grant deletion access. If the key was removed or replaced, the plugin cannot restore the old private key: use another authorized key or the VM's recovery procedure. Reinstalling never changes the keys already authorized on a VM.
+
 ## SSH port forwarding
 
 Choose **P · SSH port forwarding → N · Add port**, then select a VM. From **Your VMs**, highlight a VM and press **P** to manage its ports directly.
