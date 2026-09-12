@@ -22,3 +22,13 @@ jobs:
           python3 -m compileall -q libexec tests tools
       - name: Run tests without cloud access
         run: python3 -m unittest discover -s tests -v
+      - name: Fetch unmodified Omarchy for standalone removal tests
+        run: |
+          git init "$RUNNER_TEMP/omarchy-removal-test"
+          git -C "$RUNNER_TEMP/omarchy-removal-test" remote add origin https://github.com/omacom/omarchy.git
+          git -C "$RUNNER_TEMP/omarchy-removal-test" fetch --depth=1 origin 31bd80daa4613ffdee995ac27467fce5a2990806
+          git -C "$RUNNER_TEMP/omarchy-removal-test" checkout --detach FETCH_HEAD
+      - name: Verify removal without upstream cleanup hooks
+        env:
+          NEBIUS_TEST_OMARCHY_LEGACY_SOURCE: ${{ runner.temp }}/omarchy-removal-test
+        run: python3 -m unittest discover -s tests -p test_omarchy_cleanup.py -v

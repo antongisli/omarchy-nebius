@@ -55,7 +55,8 @@ INSTRUCTIONS = (
     "New VMs have static public IPv4 with SSH-only ingress. Use forward_port for local application access; ask which ports."
     " To uninstall this Omarchy plugin, call plan_plugin_uninstall, explain the cloud-resource warning and ask about "
     "keeping the CLI, dedicated SSH key and shared uv runtime. After explicit approval, call uninstall_plugin. "
-    "Removing only an agent MCP registration or deleting the plugin folder is not a complete uninstall. "
+    "This works on current Omarchy without a host cleanup hook. Do not use bare omarchy plugin remove: "
+    "on older hosts it removes only the bundle. Removing only an agent MCP registration or deleting the plugin folder is not a complete uninstall. "
     "Never report removal as complete without the uninstaller's verified result."
 )
 

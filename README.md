@@ -107,7 +107,13 @@ Billable and destructive actions require approval. **Agents are optional**—the
 
 **Update:** `omarchy plugin update nebius`, then reopen Nebius terminals and agent sessions.
 
-**Uninstall:** choose **U · Uninstall Nebius plugin**, or ask your agent to uninstall it. Both use the same cleanup flow. You choose whether to keep the CLI, SSH key and shared uv runtime. Older Omarchy versions remove only the widget bundle with `omarchy plugin remove nebius`. [Removal details →](docs/reference.md#uninstall-and-reinstall)
+**Uninstall:** choose **U · Uninstall Nebius plugin**, ask your Nebius-connected agent, or run:
+
+```bash
+~/.config/omarchy/plugins/nebius/bin/nebius-uninstall
+```
+
+Same cleanup, no Omarchy hook required. Choose whether to keep the CLI, SSH key and uv. **Don't use bare `omarchy plugin remove nebius` on older Omarchy:** it leaves local setup behind. [Removal & recovery →](docs/reference.md#uninstall-and-reinstall)
 
 > ⚠️ **Stop VMs when you're done—there is no auto-stop.** Disks remain billable after stopping. Uninstalling leaves all cloud resources unchanged; charges can continue.
 

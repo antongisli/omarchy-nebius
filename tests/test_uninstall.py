@@ -299,6 +299,44 @@ echo '[{"id":"nebius","enabled":true,"active":true}]'
             self.assertTrue(plugin.exists())
             self.assertEqual(sorted(p.name for p in state.iterdir()), ["keep"])
 
+    def test_checkout_can_finish_cleanup_when_plugin_bundle_is_already_gone(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            fake_bin, plugin, state, key = self.fixture(home)
+            plugin.rmdir()
+            self.write_command(fake_bin / "omarchy", "#!/bin/sh\necho 'Unexpected native remove' >&2\nexit 1\n")
+            self.write_command(fake_bin / "omarchy-shell", '''#!/bin/sh
+case "$2" in
+  rescanPlugins) touch "$HOME/rescanned"; echo ok ;;
+  listPlugins) echo '[]' ;;
+esac
+''')
+            for _ in range(2):
+                result = self.run_uninstall(home, "--yes", path=str(fake_bin) + os.pathsep + os.environ["PATH"])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("Local Nebius plugin setup removed.", result.stdout)
+                self.assertFalse(plugin.exists())
+                self.assertFalse(state.exists())
+                self.assertTrue(key.exists())
+            self.assertTrue((home / "rescanned").exists())
+
+    def test_missing_bundle_with_stale_registry_retains_cleanup_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            fake_bin, plugin, state, key = self.fixture(home)
+            plugin.rmdir()
+            self.write_command(fake_bin / "omarchy-shell", '''#!/bin/sh
+case "$2" in
+  rescanPlugins) echo ok ;;
+  listPlugins) echo '[{"id":"nebius","enabled":false,"active":false}]' ;;
+esac
+''')
+            result = self.run_uninstall(home, "--yes", path=str(fake_bin) + os.pathsep + os.environ["PATH"])
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Omarchy still lists the plugin", result.stderr)
+            self.assertTrue((state / "keep").exists())
+            self.assertTrue(key.exists())
+
     def test_cleanup_hook_leaves_plugin_removal_to_host(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

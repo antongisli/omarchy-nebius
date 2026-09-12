@@ -148,16 +148,37 @@ New VM requests attach a static public IP and a verified plugin-owned security g
 
 Use `U  Uninstall Nebius plugin` in the N panel, or ask a supported agent to uninstall the Nebius Omarchy plugin. Both invoke `bin/nebius-uninstall`. The panel opens a normal tiled terminal and defaults to **Cancel**. The agent first calls `plan_plugin_uninstall`, explains the removal scope and retention choices, then calls the destructive `uninstall_plugin` tool only after explicit approval. Removing an agent MCP registration alone is not plugin removal. Cloud resources remain outside the uninstall boundary: VMs, disks, projects, networks, and other resources are left exactly as they are and may continue to incur charges.
 
+**These paths work on current Omarchy without any upstream cleanup hook or system patch.** You can also run the shared uninstaller directly in a terminal:
+
+```bash
+~/.config/omarchy/plugins/nebius/bin/nebius-uninstall
+```
+
+An agent without the Nebius MCP connection should run this script's `--check` first, explain the scope and ask for approval and retention choices. After approval, `--yes --keep-cli --keep-ssh-key --keep-uv` removes the plugin while keeping those three dependencies. Use the corresponding `--remove-cli` or `--remove-ssh-key` only when requested. The repository's [agent instructions](../AGENTS.md) describe this fallback; no agent integration is required to run it.
+
 Confirmed uninstall removes the Omarchy widget/plugin, local state and private MCP cache, the dedicated `omarchy-nebius-mcp` profile and browser token, exact plugin-owned Codex and Claude Code MCP registrations, and the marked shortcut block. Separate choices ask whether to keep the Nebius CLI, dedicated SSH key and shared uv package; all default to **Keep**, including non-interactive `--yes`. Explicit `--remove-cli`, `--remove-ssh-key` and `--remove-uv` opt into those removals. Keeping the CLI makes reinstall faster. Keeping the key preserves access to existing VMs that trust it—a replacement key will not unlock those machines. uv may now be used by other applications; removing it requires a visible terminal and proof that setup installed it. A CLI is removable only when setup proves ownership and its checksum still matches; a changed binary is preserved. Pre-existing profiles, unrelated MCP servers, keys, shortcuts, packages, and the separate `other-tool` integration are untouched.
 
 Uninstall also stops and disables `nebius-ports.service`, removes its unit and saved forwards, and closes its SSH children.
 
 Preflight resolves the Omarchy runtime for agent/SSH shells and checks shell IPC before removing local setup. Active operations block removal. The widget is unloaded before credentials and services are removed; files and cleanup records are retained when a required cleanup step fails. The direct uninstaller verifies that the plugin is absent from disk and Omarchy's registry before reporting success. `--check` probes prerequisites without removing anything; `--dry-run` only describes scope. Failure can leave earlier cleanup stages complete, so retry the uninstaller instead of assuming rollback.
 
-### Native Omarchy removal: upstream support required
+### If the plugin folder was already removed
+
+On Omarchy 4.0.2, bare `omarchy plugin remove nebius` removes only the shell bundle. Manually deleting the folder or removing an MCP registration can also leave services, credentials and local state behind. The plugin cannot intercept those operations.
+
+To finish cleanup, use `bin/nebius-uninstall` from a trusted checkout of this repository on your Omarchy machine. No setup, browser sign-in or cloud provisioning is needed. If you don't have a checkout, clone it into a new directory, review it, then run the script:
+
+```bash
+git clone https://github.com/antongisli/omarchy-nebius nebius-uninstall-recovery
+./nebius-uninstall-recovery/bin/nebius-uninstall
+```
+
+The script checks for an installed bundle, unloads any registered widget, cleans local setup and rescans Omarchy. It skips native bundle removal when that folder is already absent, so recovery can be retried. Only the normal installed plugin path is removed; this recovery checkout and any older manual backups are left for you to delete after checking the result. If shell IPC is unavailable, run from your logged-in Omarchy session. An unavailable CLI needed to remove a dedicated profile or agent registration must be restored first; an expired cloud login does not prevent local cleanup.
+
+### Optional native removal support
 
 The repository declares `entryPoints.uninstall` as `bin/nebius-cleanup`. On a host implementing the proposed cleanup-hook contract, `omarchy plugin remove nebius` invokes the same cleanup before removing plugin files. Cleanup-only mode never recursively removes the plugin; cancellation and failures return nonzero so the host retains the files for retry. Direct panel/agent removal uses the host's explicit cleanup bypass after doing that cleanup itself.
 
-**Omarchy 4.0.2 does not implement that hook.** The proposal is [Omarchy PR #11470](https://github.com/omacom/omarchy/pull/11470). The existing generic removal command only removes the shell bundle, leaving external setup. Until upstream support ships, use the panel or the dedicated agent tool; do not claim that all native removal paths are clean. `--skip-cleanup` on newer hosts deliberately bypasses cleanup and may leave setup artifacts. Manually deleting directories or removing an agent registration cannot be intercepted by the plugin. This remains a marketplace release gate, not a documentation workaround.
+The proposal is [Omarchy PR #11470](https://github.com/omacom/omarchy/pull/11470). It is an optional convenience, not a dependency or a prerequisite for releasing the standalone uninstall flow. Until a host implements it, use the panel, agent tool or direct command above. Do not claim that bare native removal is complete on older hosts. `--skip-cleanup` on hook-enabled hosts deliberately bypasses cleanup and may leave setup artifacts.
 
 After a complete removal, reinstall with the command in the [README](../README.md#install). To exercise every dependency step, explicitly choose to remove the CLI, SSH key and uv; if kept, setup recognizes and reuses them. Start a new Codex or Claude Code session after reinstalling so it loads the new MCP registration.

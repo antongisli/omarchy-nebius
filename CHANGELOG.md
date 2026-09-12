@@ -1,12 +1,14 @@
 # Release notes
 
-## Unreleased · Uninstall hardening
+## 0.7.7 · 2026-09-12 · Standalone uninstall
 
 - Panel and agent removal share one local-only uninstaller, with preflight, widget unload and post-removal checks.
 - Added typed agent uninstall planning and confirmation tools; removing only an MCP registration is no longer described as uninstalling the Omarchy plugin.
 - Non-interactive removal keeps the CLI, SSH key and shared uv package by default. Removing uv requires a visible terminal; unrelated installations are preserved.
 - Failed cleanup returns an error instead of success. Cleanup-only cancellation aborts the host's removal; active mutations block uninstall.
-- Added an optional `entryPoints.uninstall` adapter for the proposed Omarchy cleanup hook. Native-command cleanup requires that upstream support; existing Omarchy 4.0.2 does not invoke hooks. Marketplace publication remains blocked pending that support and a verified end-to-end removal/reinstall check.
+- Panel, direct-command and agent removal work on unmodified Omarchy without cleanup hooks; CI tests that path against pinned upstream code. The optional `entryPoints.uninstall` adapter supports the proposed upstream hook but is not a release dependency.
+- Running the uninstaller from a checkout can finish local cleanup when a generic remove command or an agent already deleted the installed bundle. Recovery is retryable; stale shell registration is reported rather than hidden.
+- Added explicit standalone removal instructions for users and agents. Bare `omarchy plugin remove nebius` on older hosts still removes only the bundle; use the full uninstaller. End-to-end removal/reinstall remains a release check, independent of upstream PR acceptance.
 
 ## 0.7.6 · 2026-09-12 · Public beta
 

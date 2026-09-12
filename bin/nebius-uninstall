@@ -352,15 +352,22 @@ fi
 
 stage="removing the Omarchy plugin"
 if [[ $from_omarchy != true ]]; then
-  remove_args=(plugin remove "$PLUGIN_ID" --yes)
-  # New Omarchy hosts run our cleanup entry point. The direct panel/agent path
-  # has already done that work, so use its explicit bypass to avoid recursion.
-  remove_help=$(omarchy plugin remove --help)
-  if grep -Fq -- '--skip-cleanup' <<<"$remove_help"; then
-    remove_args+=(--skip-cleanup)
+  remove_output=""
+  if [[ -e $PLUGIN_DIR || -L $PLUGIN_DIR ]]; then
+    remove_args=(plugin remove "$PLUGIN_ID" --yes)
+    # Cleanup above is standalone: current Omarchy needs no hook or patch.
+    # On future hosts, bypass their optional hook to avoid doing it twice.
+    remove_help=$(omarchy plugin remove --help)
+    if grep -Fq -- '--skip-cleanup' <<<"$remove_help"; then
+      remove_args+=(--skip-cleanup)
+    fi
+    remove_output=$(omarchy "${remove_args[@]}")
+    printf '%s\n' "$remove_output"
+  else
+    # A generic remove or manual deletion may have removed just the bundle.
+    # The same script, run from a checkout, can finish cleanup without setup.
+    omarchy-shell shell rescanPlugins >/dev/null
   fi
-  remove_output=$(omarchy "${remove_args[@]}")
-  printf '%s\n' "$remove_output"
   [[ ! -e $PLUGIN_DIR && ! -L $PLUGIN_DIR ]] || fail "Omarchy left the plugin directory in place. Cleanup records were kept for retry."
   plugin_absent=false
   # rescanPlugins starts an asynchronous scan; allow its result to settle.

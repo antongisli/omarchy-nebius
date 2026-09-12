@@ -1,4 +1,4 @@
-"""Optional Linux integration: real Omarchy removal + real Nebius cleanup, fake home/IPC."""
+"""Linux integration: unmodified and optional hook-enabled Omarchy, fake home/IPC."""
 
 import json
 import os
@@ -11,12 +11,12 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 OMARCHY = os.environ.get("NEBIUS_TEST_OMARCHY_SOURCE")
+LEGACY_OMARCHY = os.environ.get("NEBIUS_TEST_OMARCHY_LEGACY_SOURCE")
 
 
-@unittest.skipUnless(OMARCHY, "Opt-in: requires the Omarchy cleanup-hook source on Linux")
-class OmarchyCleanupTests(unittest.TestCase):
+class CleanupFixture:
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="nebius-hook-test-")
+        self.temp = tempfile.TemporaryDirectory(prefix="nebius-removal-test-")
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name)
         self.plugin = self.home / ".config/omarchy/plugins/nebius"
@@ -69,7 +69,7 @@ esac
         self.env = {**os.environ, "HOME": str(self.home), "XDG_CONFIG_HOME": str(self.home / ".config"),
                     "XDG_STATE_HOME": str(self.home / ".state"), "XDG_CACHE_HOME": str(self.home / ".cache"),
                     "XDG_DATA_HOME": str(self.home / ".data"), "XDG_RUNTIME_DIR": str(self.home / "runtime"),
-                    "OMARCHY_PATH": str(OMARCHY), "PATH": f"{self.stubs}:{OMARCHY}/bin:/usr/bin:/bin"}
+                    "OMARCHY_PATH": str(self.omarchy), "PATH": f"{self.stubs}:{self.omarchy}/bin:/usr/bin:/bin"}
         self.env.pop("NEBIUS_CLI_BIN", None)
         self.env.pop("OMARCHY_PLUGIN_REMOVAL_ID", None)
         self.env.pop("OMARCHY_PLUGIN_DIR", None)
@@ -86,13 +86,6 @@ esac
         for path in (self.key, self.home / "cloud-resources", self.home / "unrelated-config"):
             self.assertEqual(path.read_text(), "fixture key" if path == self.key else "keep")
         self.assertTrue((self.home / "widget-disabled").exists())
-
-    def test_generic_omarchy_remove_runs_nebius_cleanup(self):
-        result = subprocess.run(["omarchy", "plugin", "remove", "nebius", "--yes"],
-                                env=self.env, text=True, capture_output=True, timeout=60)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("Cleanup completed for nebius", result.stdout)
-        self.assert_clean()
 
     def test_panel_command_cleans_once_without_hook_recursion(self):
         result = subprocess.run([str(self.plugin / "bin/nebius-uninstall"), "--yes"],
@@ -115,6 +108,18 @@ esac
         self.assertEqual(payload["structuredContent"]["status"], "removed")
         self.assert_clean()
 
+
+@unittest.skipUnless(OMARCHY, "Opt-in: requires the Omarchy cleanup-hook source on Linux")
+class OmarchyCleanupTests(CleanupFixture, unittest.TestCase):
+    omarchy = OMARCHY
+
+    def test_generic_omarchy_remove_runs_nebius_cleanup(self):
+        result = subprocess.run(["omarchy", "plugin", "remove", "nebius", "--yes"],
+                                env=self.env, text=True, capture_output=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Cleanup completed for nebius", result.stdout)
+        self.assert_clean()
+
     def test_canceling_nebius_cleanup_does_not_remove_plugin(self):
         command = shlex.join([str(self.plugin / "bin/nebius-cleanup")])
         env = {**self.env, "OMARCHY_PLUGIN_REMOVAL_ID": "nebius", "OMARCHY_PLUGIN_DIR": str(self.plugin)}
@@ -124,3 +129,63 @@ esac
         self.assertTrue(self.plugin.exists())
         self.assertTrue(self.state.exists())
         self.assertTrue(self.unit.exists())
+
+
+@unittest.skipUnless(LEGACY_OMARCHY, "Opt-in: requires unmodified Omarchy without cleanup hooks on Linux")
+class LegacyOmarchyCleanupTests(CleanupFixture, unittest.TestCase):
+    omarchy = LEGACY_OMARCHY
+
+    def setUp(self):
+        super().setUp()
+        result = subprocess.run(["omarchy", "plugin", "remove", "--help"],
+                                env=self.env, text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("--skip-cleanup", result.stdout, "Use unmodified Omarchy for this suite")
+
+    def test_interactive_panel_works_without_a_hook(self):
+        self.command("gum", '''#!/bin/bash
+case "$*" in
+*"Keep the dedicated SSH key?"*) echo 'Keep SSH key — preserve access to existing VMs' ;;
+*) echo 'Remove local setup and plugin' ;;
+esac
+''')
+        result = subprocess.run(["script", "-qec", shlex.join([str(self.plugin / "bin/nebius-uninstall")]), "/dev/null"],
+                                env=self.env, text=True, capture_output=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Local Nebius plugin setup removed.", result.stdout)
+        self.assert_clean()
+
+    def test_panel_cancel_preserves_all_setup(self):
+        result = subprocess.run(["script", "-qec", shlex.join([str(self.plugin / "bin/nebius-uninstall")]), "/dev/null"],
+                                env=self.env, text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Uninstall cancelled", result.stdout)
+        self.assertNotIn("Local Nebius plugin setup removed.", result.stdout)
+        for path in (self.plugin, self.state, self.cache, self.unit, self.key,
+                     self.home / "mcp-registration", self.home / "service-running"):
+            self.assertTrue(path.exists(), path)
+        self.assertFalse((self.home / "widget-disabled").exists())
+
+    def test_checkout_finishes_cleanup_after_bare_native_removal(self):
+        result = subprocess.run(["omarchy", "plugin", "remove", "nebius", "--yes"],
+                                env=self.env, text=True, capture_output=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.plugin.exists())
+        # This is the old host's limitation, not successful full removal.
+        for path in (self.state, self.cache, self.unit, self.home / "mcp-registration"):
+            self.assertTrue(path.exists(), path)
+        for _ in range(2):  # The recovery command must also be safe to retry.
+            result = subprocess.run([str(ROOT / "bin/nebius-uninstall"), "--yes"],
+                                    env=self.env, text=True, capture_output=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("Local Nebius plugin setup removed.", result.stdout)
+            self.assert_clean()
+
+    def test_handmade_install_removes_only_the_backup_created_by_this_uninstall(self):
+        (self.plugin / ".git").rmdir()
+        old_backup = self.plugin.parent / ".nebius.bak.20200101000000"
+        old_backup.mkdir()
+        (old_backup / "user-file").write_text("preserve")
+        self.test_panel_command_cleans_once_without_hook_recursion()
+        self.assertEqual(list(self.plugin.parent.iterdir()), [old_backup])
+        self.assertEqual((old_backup / "user-file").read_text(), "preserve")

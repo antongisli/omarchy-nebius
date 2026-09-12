@@ -56,9 +56,17 @@ For a narrow-terminal check without Qt, run `python3 tools/render_preview.py --s
 
 ### Release checks
 
-Marketplace gate: verify both `U · Uninstall Nebius plugin` and agent removal, plus native `omarchy plugin remove` on a host with the cleanup hook. Omarchy 4.0.2 lacks that hook; a local plugin change does not fix its generic command. Do not publish a claim of complete native removal until the upstream change ships and removal/reinstall has been checked.
+Required removal check: verify `U · Uninstall Nebius plugin`, direct script and agent removal on **unmodified Omarchy without cleanup hooks**, including cancellation, retained dependencies, failure reporting and a clean setup on reinstall. Also verify cleanup from a separate checkout after bare native removal has already deleted the bundle. Omarchy PR #11470 is optional; acceptance is not a release gate. Documentation must clearly direct users and agents to full uninstall rather than claiming the old generic command cleans external setup.
 
-Optional Linux cross-repository test (real Omarchy remove command and Nebius scripts, temporary home and fake IPC/services):
+CI pins unmodified Omarchy commit `31bd80daa4613ffdee995ac27467fce5a2990806` and runs the standalone panel, agent and recovery integration cases. To run them locally on Linux (real commands, temporary home, fake IPC/services; no desktop or cloud changes):
+
+```bash
+NEBIUS_TEST_OMARCHY_LEGACY_SOURCE=/path/to/unmodified-omarchy python3 -m unittest discover -s tests -p test_omarchy_cleanup.py -v
+```
+
+This suite rejects a host with `--skip-cleanup` so it cannot accidentally pass by relying on the proposed hook. It covers interactive confirmation/cancellation, agent self-removal, current-host backup behavior and retryable recovery. Real shell IPC and fresh setup still need a separately approved smoke test; mocked IPC is not graphical acceptance.
+
+Optional additional compatibility test for the proposed upstream hook:
 
 ```bash
 NEBIUS_TEST_OMARCHY_SOURCE=/path/to/omarchy-with-cleanup-hook python3 -m unittest discover -s tests -p test_omarchy_cleanup.py -v

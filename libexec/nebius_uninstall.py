@@ -58,7 +58,8 @@ def plan():
             "defaults": {"keep_cli": True, "keep_ssh_key": True, "keep_uv": True},
             "details": (result.stdout + result.stderr).strip(),
             "instruction": "Explain the warning and ask whether to keep the CLI, SSH key and uv. Then obtain explicit uninstall approval. "
-                           "Use uninstall_plugin, not agent MCP removal or deleting the plugin directory."}
+                           "Use uninstall_plugin, not bare omarchy plugin remove, agent MCP removal or deleting the plugin directory. "
+                           "No Omarchy cleanup hook is required."}
 
 
 def uninstall(*, confirmed, keep_cli, keep_ssh_key, keep_uv):
