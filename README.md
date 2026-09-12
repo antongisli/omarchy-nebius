@@ -33,6 +33,17 @@ Out of VRAM in **ComfyUI**? Trying a bigger model with **vLLM** or **Open WebUI*
 
 You get a **CUDA-ready Ubuntu VM**; you install the apps and models. Choose your GPU first, then a personal project—or create one with an editable suggested name.
 
+In **VM settings → Boot image**, choose the default Ubuntu/CUDA family or an
+existing public or custom image your account can access in that region. Custom
+images from other accessible projects are included. The picker filters known
+CPU architecture and GPU incompatibilities and shows missing compatibility
+information. Use **Boot disk** to adjust storage before reviewing the launch.
+
+RTX PRO 6000 and L40S variants share one GPU entry. Configurations with the same
+GPU count, CPU and RAM are combined; the plugin picks an available compatible
+variant for your project. Different machine sizes remain separate choices.
+
+
 <a id="install"></a>
 
 ## 🚀 Install

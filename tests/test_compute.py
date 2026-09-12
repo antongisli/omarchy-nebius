@@ -48,6 +48,55 @@ class ComputeTests(unittest.TestCase):
              patch.object(core, "preflight_vm", return_value=GOOD):
             return core.plan_gpu_vm("training-box", "choice", "project-personal", allocation, 0)
 
+    def test_selected_image_and_disk_size_reach_plan_cost_and_disk_request(self):
+        from tests.test_catalog import IMAGE
+        import nebius_catalog as catalog
+        with patch.object(core, "gpu_capacity", return_value={"offerings": [OFFERING]}), \
+             patch.object(core, "preflight_vm", return_value=GOOD) as preflight, \
+             patch.object(catalog, "get_image", return_value=IMAGE):
+            plan = core.plan_gpu_vm("training-box", "choice", "project-personal", image_id="computeimage-custom")
+        self.assertEqual(plan["image_id"], "computeimage-custom")
+        self.assertEqual(plan["image_family"], "")
+        self.assertEqual(plan["disk_gib"], 256)
+        self.assertEqual(preflight.call_args.kwargs["disk_gib"], 256)
+        self.assertEqual(preflight.call_args.kwargs["image_id"], "computeimage-custom")
+        command = core._disk_arguments(plan)
+        self.assertEqual(command[command.index("--source-image-id") + 1], "computeimage-custom")
+        self.assertNotIn("--source-image-family-image-family", command)
+        self.assertEqual(plan["estimated_usd_per_hour"], core._hourly_estimate(
+            OFFERING["platform"], 1, 16, 200, "on_demand", 256))
+
+    def test_selected_image_with_too_small_disk_cannot_plan(self):
+        from tests.test_catalog import IMAGE
+        import nebius_catalog as catalog
+        with patch.object(core, "gpu_capacity", return_value={"offerings": [OFFERING]}), \
+             patch.object(core, "run_cli") as cli, patch.object(catalog, "get_image", return_value=IMAGE):
+            with self.assertRaisesRegex(core.NebiusError, "at least 256"):
+                core.plan_gpu_vm("training-box", "choice", "project-personal", image_id="computeimage-custom", disk_gib=200)
+            cli.assert_not_called()
+        self.assertFalse(core.PLAN_DIR.exists())
+
+    def test_revoked_image_is_blocked_before_disk_or_instance_create(self):
+        import nebius_catalog as catalog
+        plan = self.plan()
+        plan.update(image_id="computeimage-revoked", image_family="", disk_gib=256)
+        core._atomic_json(core.PLAN_DIR / (plan["plan_id"] + ".json"), plan)
+        with patch.object(core, "project_context", return_value=PROJECT), \
+             patch.object(core, "run_cli", side_effect=self.preflight_cli(ssd_limit=256)) as cli, \
+             patch.object(catalog, "get_image", side_effect=core.NebiusError("Image access denied")):
+            with self.assertRaisesRegex(core.NebiusError, "Preflight failed"):
+                core.create_gpu_vm(plan["plan_id"])
+        self.assertFalse(any('create' in call.args[0] for call in cli.call_args_list))
+
+    def test_saved_disk_from_another_image_is_not_reused(self):
+        plan = self.plan()
+        saved = {"project": plan["project"], "image_family": "", "image_id": "computeimage-old", "disk_gib": 256}
+        plan.update(image_id="computeimage-new", image_family="", disk_gib=256)
+        with patch.object(core, "_reusable_disks", return_value=[saved]), \
+             patch.object(core, "_verify_reusable_disk") as verify:
+            self.assertIsNone(core._select_reusable_disk(plan))
+            verify.assert_not_called()
+
     def test_allocation_is_carried_into_exact_instance_request(self):
         for allocation in ("on_demand", "preemptible"):
             plan = self.plan(allocation)
@@ -252,10 +301,10 @@ class ComputeTests(unittest.TestCase):
             with self.assertRaisesRegex(core.NebiusError, "Invalid SSH username"):
                 core.connect_vm("computeinstance-existing", launch=False, username="-oProxyCommand=evil")
 
-    def test_external_vm_delete_is_rejected_without_cli_calls(self):
+    def test_external_vm_delete_requires_confirmation_without_cli_calls(self):
         with patch.object(core, "run_cli") as cli:
             with self.assertRaises(core.NebiusError):
-                core.delete_vm("computeinstance-external", True)
+                core.delete_vm("computeinstance-external", False)
             cli.assert_not_called()
 
     def test_mcp_advertises_allocation_and_uses_generic_names(self):
@@ -334,9 +383,12 @@ class ComputeTests(unittest.TestCase):
              patch.object(core, "preflight_vm", return_value=GOOD) as quota, patch.object(core, "ensure_ssh_key"), \
              patch.object(core, "_cloud_init", return_value="#cloud-config"), \
              patch.object(core, "validate_instance_request", return_value={"valid": True}) as validator, \
-             patch.object(core, "_wait_for_instance", return_value={"state": "running", "public_ip": "192.0.2.5"}):
+             patch.object(core, "_wait_for_instance", return_value={"state": "running", "public_ip": "192.0.2.5"}), \
+             patch.object(core, "_wait_for_vm_ssh") as readiness:
             result = core.create_gpu_vm(plan["plan_id"])
         self.assertEqual(result["disk_id"], old["disk_id"])
+        readiness.assert_called_once_with(result["id"], result["name"], core.SSH_USER)
+        self.assertTrue(result["ssh_ready"])
         self.assertFalse(any(args[:3] == ["compute", "disk", "create"] for args in calls))
         self.assertEqual(quota.call_args.kwargs["disk_gib"], 0)
         validator.assert_called_once()
@@ -532,13 +584,13 @@ class ComputeTests(unittest.TestCase):
         core._save_registry({"vms": [vm]})
         instance = {"spec": {"boot_disk": {"existing_disk": {"id": plan["disk_id"]}}}}
         disk["status"]["read_write_attachment"] = "computeinstance-other"
-        with patch.object(core, "_refresh_vm"), patch.object(core, "_accessible_vm", return_value=(instance, vm)), \
-             patch.object(core, "run_cli", side_effect=[{"id": "operation-delete"}, {"status": {}}, disk]) as cli:
+        with patch.object(core, "_verify_deletion_owner", return_value={"tenant_id": "tenant-test", "subject_id": "tenantuseraccount-test"}), patch.object(core, "_accessible_vm", return_value=(instance, vm)), \
+             patch.object(core, "run_cli", side_effect=[disk, {"id": "operation-delete"}, {"status": {}}, disk]) as cli:
             with self.assertRaisesRegex(core.NebiusError, "not safe to delete"):
                 core.delete_vm(vm["id"], True)
         self.assertTrue(core._registered(vm["id"])["instance_deleted"])
         self.assertEqual([call.args[0][:3] for call in cli.call_args_list],
-                         [["compute", "instance", "delete"], ["compute", "instance", "operation"], ["compute", "disk", "get"]])
+                         [["compute", "disk", "get"], ["compute", "instance", "delete"], ["compute", "instance", "operation"], ["compute", "disk", "get"]])
 
     def test_delete_vm_deletes_only_confirmed_boot_disk_after_live_checks(self):
         plan, disk = self.rejected_launch()
@@ -547,8 +599,8 @@ class ComputeTests(unittest.TestCase):
         core._save_registry({"vms": [vm]})
         instance = {"spec": {"boot_disk": {"existing_disk": {"id": plan["disk_id"]}},
                              "secondary_disks": [{"existing_disk": {"id": "computedisk-preserved"}}]}}
-        with patch.object(core, "_refresh_vm"), patch.object(core, "_accessible_vm", return_value=(instance, vm)), \
-             patch.object(core, "run_cli", side_effect=[{"id": "operation-vm"}, {"status": {}}, disk, {}, {"id": "operation-disk"}, {"status": {}}]) as cli, \
+        with patch.object(core, "_verify_deletion_owner", return_value={"tenant_id": "tenant-test", "subject_id": "tenantuseraccount-test"}), patch.object(core, "_accessible_vm", return_value=(instance, vm)), \
+             patch.object(core, "run_cli", side_effect=[disk, {"id": "operation-vm"}, {"status": {}}, disk, {}, {"id": "operation-disk"}, {"status": {}}]) as cli, \
              patch.object(core, "HOME", core.STATE_DIR), patch.object(core.subprocess, "run"):
             result = core.delete_vm(vm["id"], True)
         self.assertTrue(result["disk_deleted"])

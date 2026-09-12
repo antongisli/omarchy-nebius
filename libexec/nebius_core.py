@@ -278,18 +278,20 @@ def project_context(project_id: str | None = None, tenant_id: str | None = None)
 
 
 def _write_operation(phase: str, stage: str, message: str, **details: Any) -> None:
-    if os.environ.get("NEBIUS_JOB_ID") and "cloud_operations" not in details:
-        details["cloud_operations"] = current_operation().get("cloud_operations", [])
-    value = {
-            "schema": "nebius.omarchy-operation/v1",
-            "phase": phase,
-            "stage": stage,
-            "message": message,
-            "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-            **details,
-        }
-    _atomic_json(OPERATION_FILE, value)
+    import nebius_timing as timing
     job_id = os.environ.get("NEBIUS_JOB_ID", "")
+    previous = current_operation()
+    if not previous and re.fullmatch(r"[a-f0-9]{24}", job_id):
+        previous = {"started_at": _read_json(STATE_DIR / "jobs" / (job_id + ".json"), {}).get("started_at")}
+    if not job_id and phase == "running" and previous.get("phase") != "running":
+        previous = {}
+    if job_id and "cloud_operations" not in details:
+        details["cloud_operations"] = previous.get("cloud_operations", [])
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    value = {"schema": "nebius.omarchy-operation/v1", "phase": phase, "stage": stage,
+             "message": message, "updated_at": now, **details,
+             **timing.advance(previous, phase, stage, now)}
+    _atomic_json(OPERATION_FILE, value)
     if re.fullmatch(r"[a-f0-9]{24}", job_id):
         _atomic_json(STATE_DIR / "jobs" / (job_id + ".operation.json"), value)
 
@@ -476,6 +478,7 @@ def sync_personal_projects(
 
 
 def _discover_gpu_capacity() -> dict[str, Any]:
+    from nebius_catalog import gpu_name
     tenants_value = run_cli(["iam", "tenant", "list", "--all", "--format", "json"], timeout=20)
     selected_tenant_id = profile_value("tenant-id")
     if not re.fullmatch(r"tenant-[a-z0-9-]+", selected_tenant_id):
@@ -554,6 +557,10 @@ def _discover_gpu_capacity() -> dict[str, Any]:
                 except NebiusError as error:
                     errors.append({"scope": project["project_id"], "message": str(error)})
                     continue
+                project["preemptible_platforms"] = {
+                    str(row.get("metadata", {}).get("name")): row.get("status", {}).get("allowed_for_preemptibles")
+                    for row in platform_items
+                }
                 project["platforms"] = sorted(
                     str(row.get("metadata", {}).get("name"))
                     for row in platform_items
@@ -592,7 +599,7 @@ def _discover_gpu_capacity() -> dict[str, Any]:
             region = str(spec.get("region") or "")
             compatible = [
                 {
-                    key: project[key]
+                    **{key: project[key]
                     for key in (
                         "tenant_id",
                         "tenant_name",
@@ -601,7 +608,8 @@ def _discover_gpu_capacity() -> dict[str, Any]:
                         "region",
                         "subnet_id",
                         "subnet_name",
-                    )
+                    )},
+                    "allowed_for_preemptibles": project.get("preemptible_platforms", {}).get(platform),
                 }
                 for project in projects
                 if project["tenant_id"] == tenant_id
@@ -624,7 +632,7 @@ def _discover_gpu_capacity() -> dict[str, Any]:
                     "region": region,
                     "fabric": spec.get("fabric"),
                     "platform": platform,
-                    "gpu_label": platform.removeprefix("gpu-").replace("-", " ").upper(),
+                    "gpu_label": gpu_name(platform),
                     "preset": preset.get("name"),
                     "gpu_count": resources.get("gpu_count"),
                     "vcpu_count": resources.get("vcpu_count"),
@@ -649,7 +657,7 @@ def _discover_gpu_capacity() -> dict[str, Any]:
     projects.sort(key=lambda project: (str(project["project_name"]).lower(), project["project_id"]))
     personal_projects = [project for project in projects if project.get("personal")]
     clean_projects = [
-        {key: value for key, value in project.items() if key not in {"platforms", "labels", "personal"}}
+        {key: value for key, value in project.items() if key not in {"platforms", "preemptible_platforms", "labels", "personal"}}
         for project in personal_projects
     ]
     result = {
@@ -702,6 +710,7 @@ def preflight_vm(
     subnet_id: str = "",
     vm_name: str = "",
     image_family: str = "",
+    image_id: str = "",
 ) -> dict[str, Any]:
     """Read-only admission checks. Capacity advice is not project eligibility."""
     if allocation not in {"on_demand", "preemptible"} or disk_gib < 0 or gpu_count < 1:
@@ -747,15 +756,22 @@ def preflight_vm(
                     warnings.append("Live capacity is unreported; Nebius can only confirm it at submission.")
                 else:
                     check("Live capacity", True, "Capacity is currently reported; it is not reserved")
-            if image_family:
-                catalog = capability.get("metadata", {}).get("parent_id")
-                if not catalog:
-                    raise NebiusError("The platform's image catalog could not be identified")
-                image = run_cli(["compute", "image", "get-latest-by-family", "--parent-id", catalog,
-                                 "--image-family", image_family, "--format", "json"], timeout=25)
+            if image_id or image_family:
+                if image_id:
+                    from nebius_catalog import get_image, compatibility
+                    shape = {"platform": platform, "preset": preset, "region": region}
+                    image = get_image(image_id, shape)
+                    _, notes = compatibility(image, shape)
+                    warnings.extend(notes)
+                else:
+                    catalog = capability.get("metadata", {}).get("parent_id")
+                    if not catalog:
+                        raise NebiusError("The platform's image catalog could not be identified")
+                    image = run_cli(["compute", "image", "get-latest-by-family", "--parent-id", catalog,
+                                     "--image-family", image_family, "--format", "json"], timeout=25)
                 check("Boot image", image.get("status", {}).get("state") == "READY"
-                      and int(image.get("status", {}).get("min_disk_size_bytes") or 0) <= DEFAULT_DISK_GIB * 1024**3,
-                      "The boot image must be READY and fit the boot disk")
+                      and int(image.get("status", {}).get("min_disk_size_bytes") or 0) <= disk_gib * 1024**3,
+                      "The boot image must be readable, READY and fit the boot disk")
             if subnet_id:
                 subnets = _items(run_cli(["vpc", "subnet", "list", "--parent-id", project_id,
                                          "--all", "--format", "json"], timeout=25))
@@ -961,7 +977,7 @@ def _availability_score(allocation: dict[str, Any]) -> tuple[int, int]:
 
 
 def _hourly_estimate(platform: str, gpu_count: int, vcpu_count: int, memory_gib: int,
-                     allocation: str = "preemptible") -> float | None:
+                     allocation: str = "preemptible", disk_gib: int = DEFAULT_DISK_GIB) -> float | None:
     gpu_price = (PREEMPTIBLE_GPU_USD if allocation == "preemptible" else ON_DEMAND_GPU_USD).get(platform)
     if gpu_price is None:
         return None
@@ -971,7 +987,7 @@ def _hourly_estimate(platform: str, gpu_count: int, vcpu_count: int, memory_gib:
         compute += multiplier * (0.006 * vcpu_count + 0.0016 * memory_gib)
     elif platform == "gpu-l40s-d":
         compute += multiplier * (0.005 * vcpu_count + 0.0016 * memory_gib)
-    disk = DEFAULT_DISK_GIB * DISK_USD_PER_GIB_MONTH / 730
+    disk = disk_gib * DISK_USD_PER_GIB_MONTH / 730
     return round(compute + disk, 3)
 
 
@@ -989,11 +1005,15 @@ def plan_gpu_vm(
     project_id: str | None = None,
     allocation: str = "on_demand",
     auto_stop_hours: int = 0,
+    image_id: str = "",
+    disk_gib: int | None = None,
 ) -> dict[str, Any]:
     if allocation not in {"preemptible", "on_demand"}:
         raise NebiusError("Choose on_demand or preemptible allocation")
     if auto_stop_hours != 0:
         raise NebiusError("Auto-stop has been removed. Reopen the manager and review a new plan. VMs run until stopped manually.")
+    if disk_gib is not None and (type(disk_gib) is not int or not 50 <= disk_gib <= 30720):
+        raise NebiusError("Boot disk size must be between 50 and 30720 GiB")
     capacity = gpu_capacity()
     candidates = [
         offering
@@ -1039,6 +1059,19 @@ def plan_gpu_vm(
     created_at = dt.datetime.now(dt.timezone.utc)
     expires_at = created_at + dt.timedelta(minutes=10)
     gpu_count = int(selected.get("gpu_count") or 1)
+    boot_image = {"label": IMAGE_FAMILY, "note": "Public Ubuntu / CUDA image family"}
+    if image_id:
+        from nebius_catalog import get_image, image_row
+        image = get_image(image_id, selected)
+        details = image_row(image, [selected], image["metadata"]["parent_id"])
+        minimum = details["min_disk_gib"]
+        if disk_gib is None:
+            disk_gib = max(DEFAULT_DISK_GIB, minimum)
+        if disk_gib < minimum or disk_gib > 30720:
+            raise NebiusError(f"This image requires at least {minimum} GiB of boot disk storage")
+        boot_image = {"label": details["name"], "image_id": image_id,
+                      "note": "; ".join(details["warnings"]) or "Declared compatible by image metadata"}
+    disk_gib = disk_gib if disk_gib is not None else DEFAULT_DISK_GIB
     plan = {
         "schema": "nebius.omarchy-plan/v1",
         "plan_id": secrets.token_urlsafe(18),
@@ -1057,8 +1090,10 @@ def plan_gpu_vm(
         "capacity": selected[allocation],
         "subnet_id": project["subnet_id"],
         "subnet_name": project["subnet_name"],
-        "image_family": IMAGE_FAMILY,
-        "disk_gib": DEFAULT_DISK_GIB,
+        "image_family": "" if image_id else IMAGE_FAMILY,
+        "image_id": image_id,
+        "boot_image": boot_image,
+        "disk_gib": disk_gib,
         "ssh_user": SSH_USER,
         "ssh_public_key": str(SSH_KEY.with_suffix(".pub")),
         "network_note": "Static public IPv4; inbound TCP 22 only. Outbound traffic is allowed. Use Ports for local application access.",
@@ -1069,6 +1104,7 @@ def plan_gpu_vm(
             int(selected.get("vcpu_count") or 0),
             int(selected.get("memory_gib") or 0),
             allocation,
+            disk_gib,
         ),
         "pricing_url": PRICING_URL,
         "pricing_checked_at": PRICING_CHECKED_AT,
@@ -1077,9 +1113,10 @@ def plan_gpu_vm(
     plan["reusable_disk"] = _select_reusable_disk(plan)
     plan["preflight"] = preflight_vm(
         project["region"], allocation, str(selected["platform"]), gpu_count, project_id=project["project_id"],
-        disk_gib=0 if plan["reusable_disk"] else DEFAULT_DISK_GIB,
+        disk_gib=0 if plan["reusable_disk"] else plan["disk_gib"],
         preset=plan["preset"], subnet_id=plan["subnet_id"], vm_name=vm_name,
         image_family="" if plan["reusable_disk"] else plan["image_family"],
+        image_id="" if plan["reusable_disk"] else plan["image_id"],
     )
     PLAN_DIR.mkdir(parents=True, exist_ok=True)
     PLAN_DIR.chmod(0o700)
@@ -1218,7 +1255,9 @@ def _known_create_rejection(plan: dict[str, Any], error: str) -> bool:
 def _select_reusable_disk(plan: dict[str, Any]) -> dict[str, Any] | None:
     for saved in sorted(_reusable_disks(), key=lambda item: item.get("saved_at", "")):
         if (saved["project"]["project_id"] == plan["project"]["project_id"]
-                and saved["image_family"] == plan["image_family"] and saved["disk_gib"] == plan["disk_gib"]):
+                and saved.get("image_family", "") == plan.get("image_family", "")
+                and saved.get("image_id", "") == plan.get("image_id", "")
+                and saved["disk_gib"] == plan["disk_gib"]):
             _verify_reusable_disk(saved)
             return saved
     return None
@@ -1228,7 +1267,8 @@ def _release_rejected_launch(plan: dict[str, Any], error: str) -> dict[str, Any]
     """Preserve disk and evidence after a verified rejection; never delete it."""
     saved = plan.get("reusable_disk") or {
         "disk_id": plan["disk_id"], "name": plan["name"] + "-boot", "project": plan["project"],
-        "source_request_id": plan["plan_id"], "image_family": plan["image_family"], "disk_gib": plan["disk_gib"],
+        "source_request_id": plan["plan_id"], "image_family": plan["image_family"],
+        "image_id": plan.get("image_id", ""), "disk_gib": plan["disk_gib"],
     }
     disk = _verify_reusable_disk(saved)
     saved = {**saved, "state": "available", "saved_at": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -1285,6 +1325,7 @@ def _vm_record(plan, vm_id, disk_id):
         "id": vm_id, "disk_id": disk_id, "name": plan["name"],
         "project_id": plan["project"]["project_id"], "region": plan["project"]["region"],
         "platform": plan["platform"], "preset": plan["preset"], "allocation": plan["allocation"],
+        "image_id": plan.get("image_id", ""), "image_family": plan.get("image_family", ""),
         "ssh_user": SSH_USER, "created_at": plan["submitted_at"],
         "source_request_id": (plan.get("reusable_disk") or {}).get("source_request_id", plan["plan_id"]),
     }
@@ -1460,8 +1501,8 @@ def _disk_arguments(plan: dict[str, Any]) -> list[str]:
         str(plan["disk_gib"]),
         "--type",
         "network_ssd",
-        "--source-image-family-image-family",
-        plan["image_family"],
+        "--source-image-id" if plan.get("image_id") else "--source-image-family-image-family",
+        plan.get("image_id") or plan["image_family"],
         "--block-size-bytes",
         "4096",
         "--format",
@@ -1488,6 +1529,31 @@ def _wait_for_instance(vm_id: str, *, timeout: int = 720) -> dict[str, Any]:
             raise NebiusError(f"VM entered state {last_state}")
         time.sleep(5)
     raise NebiusError(f"VM did not become reachable within {timeout} seconds (last state: {last_state})")
+
+
+def _wait_for_vm_ssh(vm_id: str, name: str, username: str | None = None) -> None:
+    import nebius_ssh as ssh_client
+    details = {"vm_id": vm_id, "name": name, "ssh_user": username}
+    probe = {"attempts": []}
+    details["ssh_probe"] = probe
+    _write_operation("running", "ssh", "VM is running; waiting for authenticated SSH login", **details)
+    last_update = -2
+    def progress(message, elapsed):
+        nonlocal last_update
+        if elapsed - last_update >= 2:
+            _write_operation("running", "ssh", message, **details)
+            last_update = elapsed
+    try:
+        prepared = time.monotonic()
+        connection = connect_vm(vm_id, launch=False, username=username)
+        probe["preparation_seconds"] = round(time.monotonic() - prepared, 3)
+        if ssh_client.wait_ready(connection, progress=progress, record=probe["attempts"].append) is not True:
+            raise ssh_client.SSHError("SSH login has not been verified")
+        _write_operation("running", "ssh", "SSH readiness verified", **details)
+    except (ssh_client.SSHError, NebiusError, OSError) as error:
+        _write_operation("error", "ssh", "VM is running, but SSH login is not ready", **details,
+                         details=str(error), recovery="The VM exists. Check its SSH username, key and network, then retry SSH. Do not create another VM.")
+        raise NebiusError("VM is running, but SSH login is not ready: " + str(error)) from error
 
 
 @cloud_mutation
@@ -1535,9 +1601,10 @@ def create_gpu_vm(plan_id: str, *, dry_run: bool = False) -> dict[str, Any]:
     try:
         plan["preflight"] = preflight_vm(
             planned_project["region"], plan["allocation"], plan["platform"], plan["gpu_count"],
-            project_id=planned_project["project_id"], disk_gib=0 if reusable else DEFAULT_DISK_GIB,
+            project_id=planned_project["project_id"], disk_gib=0 if reusable else plan["disk_gib"],
             preset=plan["preset"], subnet_id=plan["subnet_id"], vm_name=plan["name"],
             image_family="" if reusable else plan["image_family"],
+            image_id="" if reusable else plan.get("image_id", ""),
         )
         _require_preflight(plan["preflight"])
         ensure_ssh_key()
@@ -1652,10 +1719,13 @@ def create_gpu_vm(plan_id: str, *, dry_run: bool = False) -> dict[str, Any]:
         raise
     vm.update(ready)
     _update_vm_record(vm_id, vm)
+    _wait_for_vm_ssh(vm_id, vm["name"], vm.get("ssh_user"))
     _write_operation(
         "ready",
         "done",
-        "VM is running; SSH login is checked when you connect",
+        "SSH login verified; your VM is ready",
+        ssh_ready=True,
+        ssh_probe=current_operation().get("ssh_probe", {}),
         name=vm["name"],
         vm_id=vm_id,
         disk_id=disk_id,
@@ -1664,6 +1734,8 @@ def create_gpu_vm(plan_id: str, *, dry_run: bool = False) -> dict[str, Any]:
         platform=plan["platform"],
         preset=plan["preset"],
     )
+    vm.update(ssh_ready=True, launch_timing=current_operation())
+    _update_vm_record(vm_id, vm)
     try:
         plan_path.unlink()
     except FileNotFoundError:
@@ -1676,6 +1748,8 @@ def list_managed_vms() -> dict[str, Any]:
     errors: list[dict[str, str]] = []
     for registered in _registry()["vms"]:
         if not isinstance(registered, dict) or not str(registered.get("id") or "").startswith("computeinstance-"):
+            continue
+        if registered.get("deletion_only"):
             continue
         vm_id = str(registered["id"])
         try:
@@ -1708,7 +1782,7 @@ def list_managed_vms() -> dict[str, Any]:
 
 
 def ssh_identity_for_instance(item: dict[str, Any]) -> str:
-    # Cloud provenance survives reinstall; local mutation ownership does not.
+    # Cloud provenance survives reinstall and selects the retained SSH key.
     labels = item.get("metadata", {}).get("labels") or {}
     return "nebius" if labels.get("managed-by") == MANAGED_BY else "default"
 
@@ -1732,7 +1806,7 @@ def _vm_summary(item: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]
                       for row in interfaces if row.get("public_ip_address", {}).get("address")), "")
     private_ip = next((str(row.get("ip_address", {}).get("address") or "").split("/")[0]
                        for row in interfaces if row.get("ip_address", {}).get("address")), "")
-    managed = bool(registered) and (metadata.get("labels") or {}).get("managed-by") == MANAGED_BY
+    managed = bool(registered) and not registered.get("deletion_only") and (metadata.get("labels") or {}).get("managed-by") == MANAGED_BY
     recovery_id = next((pending["plan_id"] for pending in _pending_launches()
                         if not registered and pending["plan_id"] == (metadata.get("labels") or {}).get("request-id")
                         and pending["project"]["project_id"] == project["project_id"]
@@ -1750,7 +1824,9 @@ def _vm_summary(item: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]
         "platform": resources.get("platform") or "CPU", "preset": resources.get("preset") or "",
         "allocation": "preemptible" if spec.get("preemptible") else "on_demand",
         "public_ip": public_ip, "private_ip": private_ip, "ssh_user": username,
-        "managed": managed, "can_delete": managed, "recovery_id": recovery_id,
+        "managed": managed, "can_delete": not bool(status.get("managed_by") or spec.get("forbid_deletion")),
+        "disk_id": spec.get("boot_disk", {}).get("existing_disk", {}).get("id", ""),
+        "recovery_id": recovery_id,
         "ssh_identity": ssh_identity_for_instance(item),
     }
 
@@ -1942,9 +2018,13 @@ def start_vm(vm_id: str) -> dict[str, Any]:
     _, vm = _accessible_vm(vm_id)
     _write_operation("running", "start", f"Starting {vm['name']}", vm_id=vm_id)
     _compute_mutation("instance", "start", vm_id)
+    _write_operation("running", "boot", "VM started; waiting for its address", vm_id=vm_id, name=vm["name"])
     ready = _wait_for_instance(vm_id)
-    _write_operation("ready", "start", f"{vm['name']} is running", vm_id=vm_id)
-    return {"id": vm_id, "name": vm.get("name"), **ready}
+    _wait_for_vm_ssh(vm_id, vm["name"], vm.get("ssh_user"))
+    _write_operation("ready", "done", f"{vm['name']} is ready for SSH", vm_id=vm_id, name=vm["name"], ssh_ready=True,
+                     ssh_probe=current_operation().get("ssh_probe", {}))
+    return {"id": vm_id, "name": vm.get("name"), "ssh_user": vm.get("ssh_user"), **ready,
+            "ssh_ready": True, "launch_timing": current_operation()}
 
 
 @cloud_mutation
@@ -1983,20 +2063,75 @@ def vm_storage(vm_id: str) -> dict[str, Any]:
                       "state": disk.get("status", {}).get("state", "unknown"),
                       "boot": disk_id == instance.get("spec", {}).get("boot_disk", {}).get("existing_disk", {}).get("id")})
     return {"vm": vm["name"], "disks": disks,
-            "note": "Attached disks remain billable when the VM stops. Delete VM and boot disk removes only the plugin's boot disk; secondary disks are kept."}
+            "note": "Attached disks remain billable when the VM stops. Delete VM and boot disk removes the reviewed boot disk; secondary disks are kept."}
+
+
+def _verify_deletion_owner(instance: dict[str, Any], vm: dict[str, Any]) -> dict[str, str]:
+    """Use cloud creation evidence, not a plugin label or a local install record."""
+    tenant_id = profile_value("tenant-id")
+    subject_id = _tenant_user_id(tenant_id)
+    metadata = instance.get("metadata", {})
+    if metadata.get("id") != vm["id"] or metadata.get("parent_id") != vm["project_id"]:
+        raise NebiusError("The VM identity changed; refresh Your VMs before deleting")
+    if instance.get("status", {}).get("managed_by") or instance.get("spec", {}).get("forbid_deletion"):
+        raise NebiusError("This VM is service-managed or protected against deletion")
+    try:
+        created = dt.datetime.fromisoformat(metadata["created_at"].replace("Z", "+00:00"))
+    except (KeyError, ValueError, TypeError):
+        raise NebiusError("Cannot verify who created this VM: its creation time is unavailable")
+    audit_filter = (f"type = 'ai.nebius.compute.computeinstance.create' AND resource.metadata.id = '{vm['id']}' "
+                    f"AND authentication.subject.tenant_user_id = '{subject_id}'")
+    events = _items(run_cli([
+        "audit", "v2", "audit-event", "list", "--parent-id", tenant_id, "--region", vm["region"],
+        "--start", (created - dt.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "--end", min(created + dt.timedelta(days=1), dt.datetime.now(dt.timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "--event-type", "control_plane", "--filter", audit_filter, "--all", "--format", "json",
+    ], timeout=90))
+    if not any(event.get("type") == "ai.nebius.compute.computeinstance.create"
+               and event.get("status") == "DONE"
+               and event.get("resource", {}).get("metadata", {}).get("id") == vm["id"]
+               and event.get("authentication", {}).get("subject", {}).get("tenant_user_id") == subject_id
+               for event in events):
+        raise NebiusError("Could not verify that you created this VM. No resources were changed. "
+                          "Check ownership in the Nebius console; creation audit history may be unavailable.")
+    return {"tenant_id": tenant_id, "subject_id": subject_id}
 
 
 @cloud_mutation
-def delete_vm(vm_id: str, confirmed: bool) -> dict[str, Any]:
+def delete_vm(vm_id: str, confirmed: bool, expected_disk_id: str | None = None) -> dict[str, Any]:
     if confirmed is not True:
         raise NebiusError("Deletion requires an explicit confirmation")
-    vm = _registered(vm_id)
+    vm = next((row for row in _registry()["vms"] if row.get("id") == vm_id), {})
+    if not vm.get("deletion_owner"):
+        instance, live = _accessible_vm(vm_id)
+        owner = _verify_deletion_owner(instance, live)
+        disk_id = instance.get("spec", {}).get("boot_disk", {}).get("existing_disk", {}).get("id", "")
+        reviewed_disk = expected_disk_id if expected_disk_id is not None else vm.get("disk_id")
+        if reviewed_disk is None or disk_id != reviewed_disk:
+            raise NebiusError("The VM's boot disk is not the reviewed disk. Refresh its details before deleting; no resources were changed")
+        if disk_id:
+            disk = run_cli(["compute", "disk", "get", disk_id, "--format", "json"], timeout=25)
+            if (disk.get("metadata", {}).get("id") != disk_id
+                    or disk.get("metadata", {}).get("parent_id") != live["project_id"]
+                    or disk.get("spec", {}).get("forbid_deletion") or disk.get("status", {}).get("managed_by")):
+                raise NebiusError("The boot disk is protected or outside this VM's project; no resources were changed")
+        # This is a confirmed deletion journal, not adoption or SSH ownership.
+        vm = {**live, "disk_id": disk_id, "deletion_owner": owner, "deletion_only": not live.get("managed")}
+        _update_vm_record(vm_id, vm)
+    else:
+        owner = vm["deletion_owner"]
+        tenant_id = profile_value("tenant-id")
+        if owner != {"tenant_id": tenant_id, "subject_id": _tenant_user_id(tenant_id)}:
+            raise NebiusError("This deletion belongs to another Nebius account or tenant")
+        if vm["project_id"] not in {p["project_id"] for p in sync_personal_projects()["projects"]}:
+            raise NebiusError("This VM is outside your personal projects in the selected tenant")
+        if expected_disk_id is not None and expected_disk_id != vm.get("disk_id"):
+            raise NebiusError("The confirmed boot disk differs from the pending deletion")
     if not vm.get("instance_deleted"):
         pending = _read_json(_cloud_operation_path(vm_id), {})
         if not pending:
-            _refresh_vm(vm_id)
             instance, _ = _accessible_vm(vm_id)
-            if instance.get("spec", {}).get("boot_disk", {}).get("existing_disk", {}).get("id") != vm.get("disk_id"):
+            if instance.get("spec", {}).get("boot_disk", {}).get("existing_disk", {}).get("id", "") != vm.get("disk_id"):
                 raise NebiusError("The VM's boot disk changed. Inspect its storage before deleting; no resources were changed")
         _write_operation("running", "delete", f"Deleting {vm.get('name')}", vm_id=vm_id)
         _compute_mutation("instance", "delete", vm_id)
@@ -2009,10 +2144,7 @@ def delete_vm(vm_id: str, confirmed: bool) -> dict[str, Any]:
     elif disk_id.startswith("computedisk-"):
         disk = run_cli(["compute", "disk", "get", disk_id, "--format", "json"], timeout=25)
         metadata, status = disk.get("metadata", {}), disk.get("status", {})
-        labels = metadata.get("labels") or {}
         if (metadata.get("id") != disk_id or metadata.get("parent_id") != vm["project_id"]
-                or labels.get("managed-by") != MANAGED_BY or not labels.get("request-id")
-                or (vm.get("source_request_id") and labels.get("request-id") != vm["source_request_id"])
                 or status.get("read_write_attachment") or status.get("read_only_attachments")
                 or status.get("reconciling") or status.get("lock_state") or status.get("managed_by")
                 or disk.get("spec", {}).get("forbid_deletion")):
@@ -2097,10 +2229,15 @@ def parse_args() -> argparse.Namespace:
     project_create.add_argument("--confirmed", action="store_true")
     project_create.add_argument("--dry-run", action="store_true")
     sub.add_parser("ensure-key")
+    images = sub.add_parser("images")
+    images.add_argument("--offering-id", action="append", required=True)
+    images.add_argument("--project-id", required=True)
     plan = sub.add_parser("plan")
     plan.add_argument("--name")
     plan.add_argument("--offering-id")
     plan.add_argument("--project-id")
+    plan.add_argument("--image-id", default="")
+    plan.add_argument("--disk-gib", type=int)
     plan.add_argument("--allocation", choices=("on_demand", "preemptible"), default="on_demand")
     plan.add_argument("--auto-stop-hours", type=int, default=0, help=argparse.SUPPRESS)
     preflight = sub.add_parser("preflight")
@@ -2135,6 +2272,7 @@ def parse_args() -> argparse.Namespace:
     delete = sub.add_parser("delete")
     delete.add_argument("--vm-id", required=True)
     delete.add_argument("--confirmed", action="store_true")
+    delete.add_argument("--expected-disk-id", help="Exact boot disk shown in the deletion review; empty for no boot disk")
     disk_delete = sub.add_parser("delete-disk")
     disk_delete.add_argument("--disk-id", required=True)
     disk_delete.add_argument("--confirmed", action="store_true")
@@ -2162,8 +2300,12 @@ def main() -> int:
         elif args.command == "ensure-key":
             ensure_ssh_key()
             value = {"private_key": str(SSH_KEY), "public_key": str(SSH_KEY.with_suffix('.pub'))}
+        elif args.command == "images":
+            from nebius_catalog import list_images
+            value = list_images(args.offering_id, args.project_id)
         elif args.command == "plan":
-            value = plan_gpu_vm(args.name, args.offering_id, args.project_id, args.allocation, args.auto_stop_hours)
+            value = plan_gpu_vm(args.name, args.offering_id, args.project_id, args.allocation,
+                                args.auto_stop_hours, args.image_id, args.disk_gib)
         elif args.command == "preflight":
             value = preflight_vm(args.region, args.allocation, args.platform, args.gpu_count, project_id=args.project_id, preset=args.preset)
         elif args.command == "create":
@@ -2183,7 +2325,7 @@ def main() -> int:
         elif args.command == "stop":
             value = stop_vm(args.vm_id, automatic=args.automatic)
         elif args.command == "delete":
-            value = delete_vm(args.vm_id, args.confirmed)
+            value = delete_vm(args.vm_id, args.confirmed, args.expected_disk_id)
         elif args.command == "delete-disk":
             value = delete_saved_disk(args.disk_id, args.confirmed)
         elif args.command == "storage":
@@ -2203,4 +2345,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # Catalog helpers share this CLI instance, including its exception type.
+    sys.modules["nebius_core"] = sys.modules[__name__]
     raise SystemExit(main())
