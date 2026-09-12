@@ -12,6 +12,7 @@ readonly RECEIPT="$STATE_DIR/install-receipt.json"
 readonly SETUP_LOG="$STATE_DIR/setup.log"
 readonly RUNTIME="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../libexec" && pwd)/nebius_runtime.py"
 readonly CLEANUP_HELPER="$(dirname -- "$RUNTIME")/nebius_uninstall.py"
+readonly SHORTCUTS_HELPER="$(dirname -- "$RUNTIME")/nebius_shortcuts.py"
 readonly CLI="$(python3 "$RUNTIME")"
 readonly PRIVATE_CLI="$(python3 "$RUNTIME" private-cli)"
 readonly CLI_CREDENTIALS="$HOME/.nebius/credentials.yaml"
@@ -141,6 +142,7 @@ if [[ -f $ports_unit ]]; then
   systemctl --user show-environment >/dev/null || fail "Cannot reach your systemd user session. Nothing was removed."
 fi
 python3 "$CLEANUP_HELPER" check-agents
+python3 "$SHORTCUTS_HELPER" check-uninstall
 if [[ -f $HOME/.nebius/config.yaml ]] && grep -Eq '^    omarchy-nebius-mcp:[[:space:]]*$' "$HOME/.nebius/config.yaml"; then
   [[ -x $CLI ]] || fail "The dedicated profile remains but its CLI is missing. Restore the Nebius CLI before uninstalling. Nothing was removed."
   profile_list=$("$CLI" profile list) || fail "Cannot inspect local Nebius profiles. Repair the CLI before uninstalling. Nothing was removed."
@@ -325,20 +327,8 @@ if [[ $ssh_key_policy == "remove" ]]; then
   rm -f "$SSH_KEY" "$SSH_KEY.pub"
 fi
 
-if [[ -f $BINDINGS ]]; then
-  start_count=$(grep -Fxc -- "$START_MARKER" "$BINDINGS" || true)
-  end_count=$(grep -Fxc -- "$END_MARKER" "$BINDINGS" || true)
-  if [[ $start_count == 1 && $end_count == 1 ]]; then
-    bindings_tmp=$(mktemp "${BINDINGS}.nebius-uninstall.XXXXXX")
-    awk -v start="$START_MARKER" -v end="$END_MARKER" '
-      $0 == start { removing = 1; next }
-      removing && $0 == end { removing = 0; next }
-      !removing { print }
-    ' "$BINDINGS" >"$bindings_tmp"
-    mv "$bindings_tmp" "$BINDINGS"
-    hyprctl reload >/dev/null 2>&1 || true
-  fi
-fi
+stage="removing plugin shortcuts"
+python3 "$SHORTCUTS_HELPER" remove-for-uninstall
 
 if [[ $cli_policy == "remove" && $cli_owned == true && -x $owned_cli ]]; then
   installed_sha=$(sha256sum "$owned_cli" | cut -d' ' -f1)

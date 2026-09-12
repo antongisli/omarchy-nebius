@@ -162,6 +162,13 @@ trap on_error ERR
 
 clear
 printf '\n  Setting up Nebius\n\n'
+say "● Preparing a dedicated keyboard shortcut"
+if shortcut_result=$(python3 "$(dirname -- "$CORE")/nebius_shortcuts.py" ensure-default 2>&1); then
+  say "✓ $shortcut_result"
+else
+  say "○ Shortcut not changed: $shortcut_result"
+  say "  Open the Nebius icon and press Shift+K to choose a different key."
+fi
 write_state "running" "uv" "Installing the MCP runtime"
 
 stage="uv"

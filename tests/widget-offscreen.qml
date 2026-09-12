@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Window
 import Quickshell
-import "plugin/qml/v076" as Plugin
+import "plugin/qml/v078" as Plugin
 
 // Run only with QT_QPA_PLATFORM=offscreen. No cloud polling or desktop window.
 ShellRoot {
@@ -52,6 +52,8 @@ ShellRoot {
         var now = new Date(widget.clockMs).toISOString()
         test.require(!widget.countVisible && widget.countLabel === "", "Fresh install must not show a count or question mark")
         test.require(widget.barTooltip.indexOf("Set up Nebius") >= 0, "Fresh install tooltip must explain setup")
+        test.require(widget.actions.some(function(action) { return action.screen === "shortcuts" && action.keyLabel === "Shift+K" }),
+          "Shortcut settings must be available before authentication without stealing k navigation")
         var badge = test.findItem(widget, "vmCountBadge")
         test.require(badge && !badge.visible, "Actual badge item must be hidden before setup")
         var iconOnlyWidth = widget.implicitWidth
