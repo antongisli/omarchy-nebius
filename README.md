@@ -18,142 +18,103 @@
 
 ![Nebius GPU for Omarchy: GPU choices and local SSH port forwarding](preview.png)
 
-*Preview rendered from the plugin interface with example data. GPU availability is checked in your account.*
+*Screenshots use the real interface with example data. Availability depends on your account.*
 
-Out of VRAM in **ComfyUI**? Want to try a larger model with **vLLM**, or connect **Open WebUI** to your own model server? Your desktop doesn't have to be the limit.
+Out of VRAM in **ComfyUI**? Trying a bigger model with **vLLM** or **Open WebUI**? Get a cloud GPU without leaving your Omarchy workflow.
 
-**Nebius GPU** brings cloud GPU discovery and VM management into Omarchy. Choose a GPU and region, review the cost and configuration, then open an SSH session. Keep your keyboard workflow while running the workload on a bigger machine.
+## ✨ What you get
 
-The plugin gets you a CUDA-ready Ubuntu VM. You install your application and models on it; app templates and automatic workload migration are not included in this release.
+- ⚡ **GPU first.** Compare types, regions and availability. Toggle on-demand or preemptible with **P**.
+- ⌨️ **Keyboard-native.** Launch, SSH, start, stop and review deletion. No command strings to memorize.
+- 🔌 **Your app, at localhost.** Saved SSH port forwards reconnect after sleep or network changes.
+- 📊 **Know what's running.** A live VM-count badge, background progress and persistent results.
+- 🤖 **Ask your agent.** Nebius tools for both Codex and Claude Code.
+- 🛡️ **Review before launch.** Preflight checks, price estimates and confirmation before creating resources.
 
-## From “out of memory” to a machine you can use
+You get a **CUDA-ready Ubuntu VM**; you install the apps and models. Choose your GPU first, then a personal project—or create one with an editable suggested name.
 
-| You want to… | The plugin helps you… |
-| --- | --- |
-| Run a workflow that no longer fits locally | Compare GPU families and regional availability before choosing a VM. |
-| Try a new model or benchmark vLLM | Launch a CUDA-ready machine with an editable name and a dedicated SSH key. |
-| Keep experimenting without losing your place | Jump back into running VMs; see state and ongoing operations from Omarchy. |
-| Choose cost versus interruption risk | Switch between on-demand and preemptible, with price estimates and configuration review. |
-| Keep cloud housekeeping manageable | Start or stop VMs, inspect storage, and explicitly delete plugin-managed VMs and boot disks. |
+<a id="install"></a>
 
-GPU choice comes first. Project placement comes afterward, with your personal projects preferred and an editable project proposal when you need one in another region.
+## 🚀 Install
 
-## Install
-
-Requires **Omarchy Quattro with plugin support**, a Nebius account, and access to billable compute. GPU availability and your account's quota determine what you can launch.
+You'll need **Omarchy Quattro with plugin support** and a **Nebius account** with compute quota. GPU availability varies.
 
 ```bash
 omarchy plugin add https://github.com/antongisli/omarchy-nebius --enable
 ```
 
-Open the lime Nebius icon in your bar and choose **Set up Nebius**. A normal tiled terminal guides you through dependency installation, browser sign-in, project discovery and SSH setup. It checks installed **Codex** and **Claude Code** agents and adds Nebius tools to both when present.
+1. Open the lime **Nebius** icon in your bar → **Set up Nebius**.
+2. Follow the terminal prompts and sign in through your browser.
+3. Press **G** to choose a GPU, review the estimate and launch.
 
-An agent is optional for the keyboard interface. For natural-language requests, install and sign in to either supported agent through Omarchy, then run setup again.
+Setup installs **uv**, a checksum-verified **Nebius CLI**, pinned **official Nebius MCP**, and a dedicated SSH key. Package installation may ask for your password. [Setup details →](docs/reference.md#what-setup-does)
 
-New to Nebius? [Create an account](https://console.nebius.com/) · [Check GPU pricing](https://nebius.com/prices)
+[Create an account](https://console.nebius.com/) · [GPU pricing](https://nebius.com/prices)
 
-<details>
-<summary>What gets installed?</summary>
+## ⌨️ Hit a key
 
-- **uv**, from Arch's official repository through `omarchy-pkg-add uv`. The visible package installer may ask for your password.
-- **Nebius CLI 0.12.269**, verified by SHA-256. A matching existing CLI is reused without claiming ownership. Otherwise a private copy is installed at `~/.local/share/nebius/cli/0.12.269/nebius` (respecting `XDG_DATA_HOME`); your existing CLI is never overwritten.
-- **Official Nebius MCP**, pinned to commit `6388bf779acdd331d9b2016230b37f8bf7177e12` and cached privately. Its runtime requires Python 3.13+; uv provisions the environment.
-- A dedicated **browser-auth profile** and **SSH key** for this plugin.
-- A constrained **`nebius` MCP registration** in each installed supported agent. Conflicting registrations are never overwritten.
+From the Nebius panel:
 
-Omarchy supplies the ordinary terminal tools used by setup, including Python, Bash, jq, curl, OpenSSH, fzf, gum and util-linux. No shell profile is edited. [Full setup and security details](docs/reference.md).
+| Key | Action | Key | Action |
+| --- | --- | --- | --- |
+| **G** | Get a GPU | **P** | Port forwarding |
+| **J** | Jump into a VM | **A** | Activity |
+| **V** | Your VMs | **S** | Set up / reconnect |
+| **C** | GPU capacity | **U** | Uninstall plugin |
 
-</details>
+Navigate with **arrows / j/k**, **Enter** and **Esc**. **/** searches; **?** shows help. In the terminal, Jump is **Shift+J**. In GPU menus, **P** switches allocation type.
 
-## Update
-
-To update, run `omarchy plugin update nebius`, then close and reopen any existing Nebius terminal. The widget reloads through its versioned entry point; no desktop restart is needed. Start new agent sessions to load updated tools. Run **S · Set up / reconnect** if prompted; your account, SSH key and saved forwards are reused. [Release notes](CHANGELOG.md).
-
-## Stay on the keyboard
-
-| Key in the Nebius panel | Action |
-| --- | --- |
-| **G** | Get a GPU: choose → review → create |
-| **J** | Jump into a running VM |
-| **V** | Your VMs: overview and lifecycle actions |
-| **C** | GPU capacity by family and region |
-| **P** | Saved local ports: add, open, pause or remove a forward |
-| **A** | Activity: concurrent operations, progress and results |
-| **S** | Set up or reconnect your account |
-| **U** | Uninstall Nebius plugin |
-
-Inside the terminal, use **arrows** or **j/k**, **Enter**, **Esc**, **/** to search, and **?** for help. GPU menus show an **On-demand / Preemptible switch at the top**: **P** toggles the highlighted option and updates the displayed availability; **R** fetches a fresh capacity snapshot. The terminal manager uses **Shift+J** for Jump because lowercase **j** moves down.
-
-Before setup, the bar shows only the Nebius icon. After setup, a small **running VM count badge** appears on the icon: **0–9**, then **9+**, with the exact count in the tooltip. An unknown or stale count displays **?**, so failed refreshes never look like an empty account. Middle-click the icon to jump into a VM.
-
-For direct desktop shortcuts, add the optional [Super+Ctrl+G/J/M bindings](config/keybindings.lua) after checking for conflicts with your existing bindings.
-
-## Use remote applications locally
-
-Choose **P · SSH port forwarding → N · Add port**, select the VM, and enter the application's remote TCP port. The local port defaults to the same number (or an unprivileged alternative for ports below 1024). If it is occupied, choose another. For example, remote port 8188 becomes `http://127.0.0.1:8188` on your laptop. From **Your VMs**, highlight a VM and press **P** to manage its ports directly.
-
-Both ports share one form: **Tab / ↑↓** switches fields, **←→** moves the cursor, **Enter** saves, and **Esc** cancels. A live diagram shows `this computer → SSH → VM application`. The local port follows the remote port until you customize it; validation keeps both values on screen.
-
-Forwards listen only on the laptop's loopback address and travel through encrypted SSH. No public application port, domain or HTTPS certificate is needed. Start the application on the VM, listening on its loopback interface; Docker applications must publish their port to the VM loopback interface too.
-
-Enabled mappings are saved and restored by a systemd user service after login, independently of the terminal window. They reconnect after sleep or network changes. Stopping a VM preserves its mappings without starting the VM automatically; deleting it disables them. The Ports list updates every two seconds without resetting selection or search; **R** refreshes immediately. It offers actions to open HTTP apps in a browser, copy the address, inspect errors, pause/resume or remove a mapping. **Connected** describes the SSH tunnel, not application health. Requests in flight can fail during sleep or reconnect; refresh the browser afterward.
-
-<details>
-<summary>See port forwarding, VM management and Activity</summary>
-
-![One form for both ports, with keyboard navigation and an SSH route diagram](docs/screenshots/port-form.png)
-
-![Saved port forwards with live tunnel status](docs/screenshots/ports.png)
+Want global shortcuts? Add the optional [Super+Ctrl+G/J/M bindings](config/keybindings.lua).
 
 ![VM overview with direct SSH, start, stop and deletion shortcuts](docs/screenshots/overview.png)
 
-![Activity separates in-progress work from saved results and actionable failures](docs/screenshots/activity.png)
+## 🔌 Remote GPU. Local URL.
 
-These captures use the production drawing code with synthetic example data, not a user's account. They do not imply that ComfyUI or model-serving applications are installed automatically.
+Start your app on the VM, then choose **P · Port forwarding → N · Add port**. Pick the VM and set both ports in one form; **Tab** moves between them.
 
-</details>
+An app on VM port **8188** can open at **http://127.0.0.1:8188** on your desktop. Traffic goes through encrypted SSH, with no public app port to open.
 
-New VMs receive a **static public IPv4 address and an explicit security group allowing only inbound SSH (TCP 22)**. Outbound traffic is allowed for package and model downloads. Existing VMs are not modified. The SSH rule permits any source IP so changing laptop networks does not lock you out; SSH key authentication is still required. Plugin-owned SSH security groups can be reused within a network and remain after VM deletion.
+![Saved port forwards with live tunnel status](docs/screenshots/ports.png)
 
-Start, stop and deletion return immediately to the VM overview. Independent VMs can run operations concurrently; conflicting operations on the same VM are rejected. Activity stores each job separately. If a lifecycle worker is interrupted, **Activity → operation → Resume operation** reconciles its saved cloud operation before finishing cleanup. VM deletion always finishes before checking and deleting its boot disk.
+Forwards survive closing the menu and reconnect after sleep. **Connected** means the tunnel is ready—not that the app is running. [Port forwarding guide →](docs/reference.md#ssh-port-forwarding)
 
-Activity puts running operations first, with recent results below, and updates every two seconds while preserving selection and search. Older completed jobs use their saved results or history, not a misleading waiting message. Interrupted work says **Check outcome**; Resume is offered only when the exact request was saved.
+<a id="use-your-agent"></a>
 
-From the VM list: **C** connects, **P** opens SSH ports, **S** stops, **T** starts, and **D** reviews deletion for the highlighted VM. Start/stop/delete each use one review, with a named confirmation key and **Esc** to cancel. Deletion never submits just because you press Enter to read the next page. Action menus show letter keys beside choices and in the footer; resource lists offer number keys and `/` search. During a submitted operation, **Esc or B** returns to the overview without cancelling the work; **A** reopens Activity.
+## 🤖 Or just ask
 
-SSH checks login readiness for up to two minutes before opening the session, including the first boot's user/key setup. The wait shows progress and **Esc** returns without stopping the VM. A failed connection stays on screen with retry and username actions; the latest diagnostic is retained in local `ssh-last-error.json`. Changed host keys are never accepted automatically.
-
-## Use your agent
-
-Setup detects your Omarchy default agent, checks sign-in, and registers the same constrained tools with installed **Codex and Claude Code**. Start a new agent session after setup, then try:
+Setup adds Nebius tools to installed **Codex** and **Claude Code** agents. Sign in to your agent and start a new session, then try:
 
 > Show me GPU availability by region.
 
-> I need a GPU for a vLLM experiment. Show me options and the estimated cost before creating anything.
+> Get me a GPU for vLLM. Show the options and cost before creating anything.
 
-> List my running VMs and help me connect to one.
+Billable and destructive actions require approval. **Agents are optional**—the keyboard interface works without one. Agent billing is separate from Nebius compute.
 
-The tools cover capacity, project placement, planning, VM creation and lifecycle, and SSH. Billable and destructive operations require approval. The agent's own subscription or API billing is separate from Nebius compute billing.
+<details>
+<summary>📸 More screenshots</summary>
 
-## Know what is happening
+**One form for both ports**
 
-- **Preflight before allocation.** Check capacity advice, GPU and disk quota, image, subnet, allocation eligibility and request syntax before a VM launch allocates a disk.
-- **Review before billing.** See the machine, project, allocation, boot disk and available price estimate before confirmation.
-- **Progress that survives the window.** A submitted launch continues in the background. Reopen activity to see its result or error.
-- **Failures stay visible.** Uncertain launches have recovery actions. Retained boot disks stay available for reuse or explicit cleanup.
-- **Reconnect when needed.** Expired Nebius sessions prompt browser sign-in; there is no service-account setup.
+![Local and remote port fields with keyboard navigation and an SSH route diagram](docs/screenshots/port-form.png)
 
-Preflight is not a capacity reservation or a guarantee of permissions. Stop VMs manually when finished: **auto-stop is not included**. Stopped VMs retain billable storage until the disks are deleted.
+**Progress and results in Activity**
 
-## Remove or reinstall
+![Running operations, saved results and actionable failures](docs/screenshots/activity.png)
 
-Choose **U · Uninstall Nebius plugin** for the full local cleanup. You can keep the CLI for faster reinstall and keep the SSH key to preserve access to existing VMs.
+</details>
 
-**Cloud resources remain unchanged and may keep costing money.** Removing the plugin does not stop or delete VMs, disks, projects or networks. Direct `omarchy plugin remove nebius` removes the widget bundle only; use the plugin's uninstall action to also remove its local setup.
+## 🧹 Update & uninstall
 
-## Project status
+**Update:** `omarchy plugin update nebius`, then reopen Nebius terminals and agent sessions.
 
-Public beta for Omarchy Quattro. Built and checked on a real Omarchy desktop, with regression coverage for keyboard navigation, narrow terminals, preflight failures, installer ownership and resource cleanup. [Release notes](CHANGELOG.md) · [Development guide](docs/development.md) · [Known limits and implementation details](docs/reference.md) · [Report an issue](https://github.com/antongisli/omarchy-nebius/issues)
+**Uninstall:** choose **U · Uninstall Nebius plugin** for full local cleanup. You choose whether to keep the CLI and SSH key. Direct `omarchy plugin remove nebius` removes only the widget bundle. [Removal details →](docs/reference.md#uninstall-and-reinstall)
 
+> ⚠️ **Stop VMs when you're done—there is no auto-stop.** Disks remain billable after stopping. Uninstalling leaves all cloud resources unchanged; charges can continue.
 
-Maintained by [Anton Smith](https://github.com/antongisli). Uses the official Nebius CLI and MCP and has no dependency on the separate `other-tool` integration. Code is [MIT licensed](LICENSE); Nebius marks remain the property of their owners. [Brand asset sources](assets/NOTICE.md).
+## 🛠️ Public beta
+
+Found a rough edge? [Open an issue](https://github.com/antongisli/omarchy-nebius/issues). Contributions welcome.
+
+[Release notes](CHANGELOG.md) · [Full reference](docs/reference.md) · [Contributing](docs/development.md) · [Roadmap](docs/roadmap.md)
+
+Maintained by [Anton Smith](https://github.com/antongisli). Official Nebius CLI + MCP; no `other-tool` dependency. [MIT code](LICENSE) · [Brand credits](assets/NOTICE.md)

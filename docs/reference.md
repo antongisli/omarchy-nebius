@@ -11,13 +11,15 @@ This repository does not depend on `other-tool` or modify its configuration.
 - Creates the dedicated `omarchy-nebius-mcp` profile through the official `nebius profile create` browser flow.
 - Rejects service-account profiles and paths under `~/.other-tool`; it never reuses the active `other-tool` profile.
 - Uses the selected tenant without locking the plugin to one project. Projects created by the signed-in user are preferred; shared tenant projects are hidden from normal placement.
-- Downloads and tests Nebius MCP commit `6388bf779acdd331d9b2016230b37f8bf7177e12` in a plugin-private uv cache.
+- Downloads and tests Nebius MCP commit `6388bf779acdd331d9b2016230b37f8bf7177e12` in a plugin-private uv cache. It requires Python 3.13+; uv provisions the runtime environment.
 - Creates a dedicated Ed25519 key at `~/.ssh/nebius-ed25519` for plugin-created VMs.
 - Detects Omarchy's configured agent and registers a constrained `nebius` MCP server with each installed supported agent: Codex and Claude Code. It exposes typed capacity, project setup, plan, create, list, start, stop, delete, and connect tools—never a free-form command executor.
 - Keeps the upstream MCP runtime private to its narrow compatibility bridge.
 - Uses a normal tiled setup terminal so browser authentication never leaves a blocking floating overlay.
 
 The installer is re-runnable and does not edit `.zshrc`. It uses each agent's own CLI to add only the `nebius` MCP registration to `~/.codex/config.toml` and/or `~/.claude.json`, and refuses to overwrite a server with the same name but a different command. Agent installation is not required for the keyboard manager; it is required only for natural-language actions. Setup reports when neither supported agent is installed and reports sign-in separately for every agent it finds.
+
+Omarchy supplies the ordinary terminal tools used by setup: Python, Bash, jq, curl, OpenSSH, fzf, gum and util-linux. Package installation runs visibly and may ask for your password; the plugin does not silently escalate privileges.
 
 ## Default VM workflow
 
@@ -82,6 +84,22 @@ Use arrows or `j/k`, Enter, Escape/back, and `/` search throughout the terminal.
 - `U` — **Uninstall Nebius plugin** and its local setup. The confirmation explicitly warns that cloud resources remain unchanged and may continue to incur charges.
 
 For natural-language use, choose Codex or Claude Code in Omarchy, sign in to that agent, and start a new agent session to load the updated tools. Ask “show GPU capacity” or “get me a VM and put me in it.” The agent presents GPU choices before project placement, shows the plan, asks for a normal confirmation, and relies on write-tool approval instead of a typed magic phrase.
+
+## SSH port forwarding
+
+Choose **P · SSH port forwarding → N · Add port**, then select a VM. From **Your VMs**, highlight a VM and press **P** to manage its ports directly.
+
+Enter the application's remote TCP port and the local port in one form. The local value follows the remote value until customized, with an unprivileged alternative for remote ports below 1024. If the local port is occupied, choose another. **Tab / ↑↓** switches fields, **←→** moves the cursor, **Enter** saves and **Esc** cancels. The diagram shows `this computer → SSH → VM application`; validation keeps both values on screen.
+
+For example, forwarding remote port 8188 to local port 8188 makes an HTTP app available at `http://127.0.0.1:8188`. Start the app on the VM, listening on its loopback interface. Docker apps must publish their port to the VM loopback interface too. Tunnels bind only to your computer's `127.0.0.1` and use encrypted SSH; no public application port, domain or HTTPS certificate is needed.
+
+Enabled mappings persist through a systemd user service independently of the terminal window. They are restored after login and reconnect after sleep or network changes. Stopping a VM preserves mappings without starting the VM automatically; deleting it disables them. Requests in flight can fail during reconnect—refresh the browser afterward.
+
+The Ports list updates every two seconds while preserving selection and search; **R** refreshes immediately. Open HTTP apps in the browser, copy an address, inspect errors, pause/resume or remove a mapping. **Connected** describes the SSH tunnel, not application health: the application still needs to be running on the remote port. See [Security boundary](#security-boundary) for service, authentication and networking details.
+
+## Update
+
+Run `omarchy plugin update nebius`, then close and reopen existing Nebius terminals. The widget reloads through its versioned entry point; no desktop restart is needed. Start new agent sessions to load updated tools. Use **S · Set up / reconnect** if prompted; your account, SSH key and saved forwards are reused. See the [release notes](../CHANGELOG.md).
 
 ## Development smoke test
 
