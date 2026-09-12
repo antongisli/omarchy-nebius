@@ -1155,7 +1155,8 @@ class App:
             if self.confirm_launch(notes, json.dumps(vm, indent=2), title=label,
                                    action="delete permanently" if action == "delete" else label.lower(),
                                    confirm_key={"delete": "d", "start": "t", "stop": "s"}[action]):
-                self.mutate(label + " · " + vm["name"], action, "--vm-id", vm["id"], *(["--confirmed"] if action == "delete" else []))
+                self.mutate(label + " · " + vm["name"], action, "--vm-id", vm["id"],
+                            *(["--confirmed", "--expected-disk-id", str(vm.get("disk_id") or "")] if action == "delete" else []))
 
     def recovery_actions(self, request):
         choice = self.menu("Interrupted launch", [

@@ -115,7 +115,7 @@ class InteractionTests(unittest.TestCase):
         application, screen = app(["d", "d"], 120, 44)
         with patch.object(application, "mutate") as mutate:
             application.vm_actions(dict(VM))
-        mutate.assert_called_once_with("Delete VM and boot disk · training", "delete", "--vm-id", VM["id"], "--confirmed")
+        mutate.assert_called_once_with("Delete VM and boot disk · training", "delete", "--vm-id", VM["id"], "--confirmed", "--expected-disk-id", VM["disk_id"])
         self.assertEqual(len(screen.frames), 2)
         self.assertIn("Cannot be undone", screen.frames[-1])
         self.assertIn("Secondary disks", screen.frames[-1])

@@ -165,10 +165,11 @@ TOOLS = [
     ),
     tool(
         "delete_vm",
-        "Permanently delete a plugin-created VM and its boot disk after a plain-language confirmation and destructive tool approval.",
+        "Permanently delete your VM and its reviewed boot disk after explicit confirmation. Cloud audit evidence must identify you as its creator; plugin registration is not required. Secondary disks are kept.",
         {
             "vm_id": {"type": "string"},
             "confirmed": {"type": "boolean", "description": "True only after the user plainly confirmed deletion."},
+            "expected_disk_id": {"type": "string", "description": "Exact boot disk ID reviewed with the user, from list_vms or vm_storage; empty if there is no boot disk."},
         },
         ["vm_id", "confirmed"],
         read_only=False,
@@ -231,7 +232,7 @@ def _call(name: str, arguments: dict[str, Any]) -> Any:
         "create_gpu_vm": lambda: jobs.submit(["create", "--plan-id", str(arguments.get("plan_id", ""))]),
         "start_vm": lambda: jobs.submit(["start", "--vm-id", str(arguments.get("vm_id", ""))]),
         "stop_vm": lambda: jobs.submit(["stop", "--vm-id", str(arguments.get("vm_id", ""))]),
-        "delete_vm": lambda: submit_delete("delete", "--vm-id", arguments.get("vm_id"), arguments.get("confirmed")),
+        "delete_vm": lambda: submit_delete("delete", "--vm-id", arguments.get("vm_id"), arguments.get("confirmed"), arguments.get("expected_disk_id")),
         "delete_saved_disk": lambda: submit_delete("delete-disk", "--disk-id", arguments.get("disk_id"), arguments.get("confirmed")),
         "list_operations": lambda: {"jobs": jobs.jobs()},
         "list_ports": lambda: {"ports": ports.listing()},
@@ -251,10 +252,13 @@ def _call(name: str, arguments: dict[str, Any]) -> Any:
         return handlers[name]()
 
 
-def submit_delete(command, flag, resource_id, confirmed):
+def submit_delete(command, flag, resource_id, confirmed, expected_disk_id=None):
     if confirmed is not True:
         raise NebiusError("Deletion requires an explicit confirmation")
-    return jobs.submit([command, flag, str(resource_id or ""), "--confirmed"])
+    arguments = [command, flag, str(resource_id or ""), "--confirmed"]
+    if expected_disk_id is not None:
+        arguments += ["--expected-disk-id", str(expected_disk_id)]
+    return jobs.submit(arguments)
 
 
 def _write(value: dict[str, Any]) -> None:
