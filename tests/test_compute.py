@@ -48,6 +48,55 @@ class ComputeTests(unittest.TestCase):
              patch.object(core, "preflight_vm", return_value=GOOD):
             return core.plan_gpu_vm("training-box", "choice", "project-personal", allocation, 0)
 
+    def test_selected_image_and_disk_size_reach_plan_cost_and_disk_request(self):
+        from tests.test_catalog import IMAGE
+        import nebius_catalog as catalog
+        with patch.object(core, "gpu_capacity", return_value={"offerings": [OFFERING]}), \
+             patch.object(core, "preflight_vm", return_value=GOOD) as preflight, \
+             patch.object(catalog, "get_image", return_value=IMAGE):
+            plan = core.plan_gpu_vm("training-box", "choice", "project-personal", image_id="computeimage-custom")
+        self.assertEqual(plan["image_id"], "computeimage-custom")
+        self.assertEqual(plan["image_family"], "")
+        self.assertEqual(plan["disk_gib"], 256)
+        self.assertEqual(preflight.call_args.kwargs["disk_gib"], 256)
+        self.assertEqual(preflight.call_args.kwargs["image_id"], "computeimage-custom")
+        command = core._disk_arguments(plan)
+        self.assertEqual(command[command.index("--source-image-id") + 1], "computeimage-custom")
+        self.assertNotIn("--source-image-family-image-family", command)
+        self.assertEqual(plan["estimated_usd_per_hour"], core._hourly_estimate(
+            OFFERING["platform"], 1, 16, 200, "on_demand", 256))
+
+    def test_selected_image_with_too_small_disk_cannot_plan(self):
+        from tests.test_catalog import IMAGE
+        import nebius_catalog as catalog
+        with patch.object(core, "gpu_capacity", return_value={"offerings": [OFFERING]}), \
+             patch.object(core, "run_cli") as cli, patch.object(catalog, "get_image", return_value=IMAGE):
+            with self.assertRaisesRegex(core.NebiusError, "at least 256"):
+                core.plan_gpu_vm("training-box", "choice", "project-personal", image_id="computeimage-custom", disk_gib=200)
+            cli.assert_not_called()
+        self.assertFalse(core.PLAN_DIR.exists())
+
+    def test_revoked_image_is_blocked_before_disk_or_instance_create(self):
+        import nebius_catalog as catalog
+        plan = self.plan()
+        plan.update(image_id="computeimage-revoked", image_family="", disk_gib=256)
+        core._atomic_json(core.PLAN_DIR / (plan["plan_id"] + ".json"), plan)
+        with patch.object(core, "project_context", return_value=PROJECT), \
+             patch.object(core, "run_cli", side_effect=self.preflight_cli(ssd_limit=256)) as cli, \
+             patch.object(catalog, "get_image", side_effect=core.NebiusError("Image access denied")):
+            with self.assertRaisesRegex(core.NebiusError, "Preflight failed"):
+                core.create_gpu_vm(plan["plan_id"])
+        self.assertFalse(any('create' in call.args[0] for call in cli.call_args_list))
+
+    def test_saved_disk_from_another_image_is_not_reused(self):
+        plan = self.plan()
+        saved = {"project": plan["project"], "image_family": "", "image_id": "computeimage-old", "disk_gib": 256}
+        plan.update(image_id="computeimage-new", image_family="", disk_gib=256)
+        with patch.object(core, "_reusable_disks", return_value=[saved]), \
+             patch.object(core, "_verify_reusable_disk") as verify:
+            self.assertIsNone(core._select_reusable_disk(plan))
+            verify.assert_not_called()
+
     def test_allocation_is_carried_into_exact_instance_request(self):
         for allocation in ("on_demand", "preemptible"):
             plan = self.plan(allocation)

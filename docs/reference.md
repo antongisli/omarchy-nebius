@@ -21,6 +21,48 @@ The installer is re-runnable and does not edit `.zshrc`. It uses each agent's ow
 
 Omarchy supplies the ordinary terminal tools used by setup: Python, Bash, jq, curl, OpenSSH, fzf, gum and util-linux. Package installation runs visibly and may ask for your password; the plugin does not silently escalate privileges.
 
+## Image selection
+
+After choosing a GPU configuration and destination project, open **Boot image**
+in VM settings. The picker lists public images for the selected region and
+custom images in accessible projects of the configured tenant, including shared
+image projects. This does not add shared projects to the VM destination list.
+Search by name or image ID; press R to refresh. Listing failures are shown as
+incomplete discovery, while images from successful sources remain usable.
+
+Images must be READY and not reconciling. Known CPU-architecture mismatches,
+unsupported platforms, and unsupported presets are excluded. Current documented
+GPU platforms use AMD64 CPUs. Unknown architecture or absent GPU recommendations
+are shown explicitly; lack of a recommendation is not treated as an exclusion.
+An image must support cloud-init so the plugin can create the `dev` user and
+install the SSH key. GPU driver and workload compatibility cannot be proven from
+image metadata alone.
+
+Selecting an image pins its exact ID for this launch. Boot disk size grows to at
+least the image minimum and can be edited separately. Plans and final review
+show the source, disk size and price estimate. Live preflight rechecks access,
+region, compatibility, readiness and disk fit before allocation. Saved boot disks
+are reused only when their image ID/family and disk size match. The selection is
+local to the current launch; existing VMs are unaffected.
+
+For agents, `list_images` accepts offering IDs and a destination project ID;
+`plan_gpu_vm` accepts optional `image_id` and `disk_gib`. The CLI equivalents are
+`nebius_core.py images --offering-id ID --project-id ID` and
+`nebius_core.py plan --offering-id ID --project-id ID --image-id IMAGE_ID --disk-gib 256`.
+The selector uses images already present in Compute. It creates no image,
+import, bucket or publishing configuration.
+
+## GPU variant grouping
+
+Known RTX PRO 6000, L40S and B200 variants share product names. Equivalent
+configurations are grouped by tenant, region, GPU count, CPU count, RAM, GPU
+memory and CPU architecture. Availability shows the best reported pool, not a
+sum across potentially overlapping capacity advice. Actual platform, preset and
+fabric IDs are retained for placement, live preflight, pricing and API requests.
+After project/image selection, the plugin picks a matching variant by capacity,
+then estimated price on ties. Known project-level preemptible restrictions are
+respected. A failure after submission never triggers a second automatic launch.
+
 ## Default VM workflow
 
 - Reads regional Capacity Advisor data for the configured tenant while keeping shared project names out of the normal workflow.

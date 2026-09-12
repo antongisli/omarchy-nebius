@@ -1,10 +1,20 @@
 # Release notes
 
+## Unreleased · Image picker and GPU grouping
+
+- VM settings can select existing public and accessible custom images for the
+  chosen region and machine, with compatibility details and editable disk size.
+- Image access, region, hardware restrictions, readiness and disk fit are checked
+  before allocation. Agents can list images and plan with an exact image ID.
+- RTX PRO 6000 and L40S platform variants share product names and equivalent
+  configurations; placement retains the exact underlying platform and preset.
+
 ## 0.7.10 · 2026-09-12 · Lifecycle response handling
 
 - Start, stop and deletion now accept the CLI's plain-text asynchronous operation ID, as well as JSON-encoded IDs. Resource and operation-status responses still require JSON.
 - Operation IDs are validated and saved before polling. Invalid replies retain the submission journal, so retrying cannot silently submit the same action twice.
 - Added stdout-level regressions for instance and disk operations, failed polling, invalid responses and read-only reconciliation of an uncertain request.
+
 
 ## 0.7.9 · 2026-09-12 · SSH after reinstall
 

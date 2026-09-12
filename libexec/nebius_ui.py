@@ -25,6 +25,7 @@ import unicodedata
 from typing import Any
 
 import nebius_core as core
+import nebius_catalog as catalog
 import nebius_jobs as jobs
 import nebius_ports as ports
 import nebius_ssh as ssh_client
@@ -639,7 +640,7 @@ class App:
         while True:
             groups: dict[str, list[dict[str, Any]]] = {}
             for row in self.capacity.get("offerings", []):
-                groups.setdefault(row["gpu_label"], []).append(row)
+                groups.setdefault(catalog.gpu_name(row.get("platform", ""), row["gpu_label"]), []).append(row)
             rows = []
             for label, offerings in sorted(groups.items()):
                 best = max(offerings, key=lambda item: core._availability_score(item[self.allocation]))
@@ -664,7 +665,8 @@ class App:
 
     def configuration(self, gpu_label):
         while True:
-            offerings = [row for row in self.capacity.get("offerings", []) if row["gpu_label"] == gpu_label]
+            offerings = catalog.configurations([row for row in self.capacity.get("offerings", [])
+                        if catalog.gpu_name(row.get("platform", ""), row["gpu_label"]) == gpu_label], self.allocation)
             offerings.sort(key=lambda row: (int(row.get("gpu_count") or 0), -core._availability_score(row[self.allocation])[0], row["region"]))
             rows = [(f"{row['gpu_count']}× {gpu_label} · {row['region']}",
                      f"{row['vcpu_count']} vCPU · {row['memory_gib']} GiB RAM\n"
@@ -712,14 +714,41 @@ class App:
                 result = self.mutate("Creating project", "create-project", "--region", offering["region"], "--name", name, "--confirmed")
                 self.notice = f"Project {result['project_name']} created."
                 self.load_capacity(True)
-                refreshed = next((item for item in self.capacity["offerings"] if item["offering_id"] == offering["offering_id"]), None)
+                refreshed = next((item for item in catalog.configurations(self.capacity["offerings"], self.allocation)
+                                  if catalog.configuration_key(item) == catalog.configuration_key(offering)), None)
                 if not refreshed or result["project_id"] not in {p["project_id"] for p in refreshed["projects"]}:
                     raise core.NebiusError("The project exists, but GPU placement is not ready yet. Refresh capacity in a moment.")
+                offering.update(refreshed)
                 return result["project_id"]
             except Back:
                 continue
             except core.NebiusError as error:
                 self.show_error(error)
+
+    def choose_image(self, offering, project_id):
+        arguments = ["images", "--project-id", project_id]
+        for variant in offering.get("variants", [offering]):
+            arguments += ["--offering-id", variant["offering_id"]]
+        while True:
+            result = self.read("Finding available images", *arguments)
+            rows = [("Default Ubuntu / CUDA", core.IMAGE_FAMILY, None, "Default")]
+            for image in result["images"]:
+                detail = (f"{image['cpu_architecture']} · minimum {image['min_disk_gib']} GiB disk\n"
+                          f"{image['image_id']}")
+                if image.get("summary"):
+                    detail = image["summary"] + "\n" + detail
+                if image.get("description"):
+                    detail += "\n" + image["description"]
+                if image["warnings"]:
+                    detail += "\n" + "; ".join(image["warnings"])
+                rows.append((image["name"], detail, image, image["source"]))
+            chosen = self.menu("Boot image", rows, subtitle=offering["region"],
+                               notes=["Public and accessible project images. Known architecture and hardware mismatches are excluded.",
+                                      "Custom images must support cloud-init to install your SSH key."] + result["warnings"],
+                               actions={"r": "__refresh"},
+                               footer="↑↓ / j k move   Enter select   R refresh   / search   Esc back")
+            if chosen != "__refresh":
+                return chosen
 
     def launch_flow(self, offering):
         # A new project needs a new disk. Existing projects may already have a
@@ -735,11 +764,15 @@ class App:
         project_id = self.choose_project(offering)
         suggested = offering["platform"].removeprefix("gpu-").split("-")[0] + "-" + dt.datetime.now().strftime("%m%d-%H%M")
         name = suggested
+        image = None
+        disk_gib = core.DEFAULT_DISK_GIB
         plan = None
         created_vm = None
         while True:
             action = self.menu("VM settings", [
                 ("Name", name, "name", "Configuration"),
+                ("Boot image", image["name"] if image else "Default Ubuntu / CUDA", "image", "Configuration"),
+                ("Boot disk", f"{disk_gib} GiB Network SSD", "disk", "Configuration"),
                 ("Allocation", allocation_label(self.allocation) + " · [P] switch", "allocation", "Configuration"),
                 ("Project", next((p["project_name"] for p in self.capacity["projects"] if p["project_id"] == project_id), project_id), "project", "Configuration"),
                 ("Review and create", "Run preflight checks and review cost before confirming", "review", "Next step"),
@@ -751,18 +784,41 @@ class App:
                     name = self.edit("VM name", name, validate=core._safe_name)
                 except Back:
                     pass
+            elif action == "image":
+                try:
+                    image = self.choose_image(offering, project_id)
+                    disk_gib = max(disk_gib, image["min_disk_gib"]) if image else disk_gib
+                except Back:
+                    pass
+                except core.NebiusError as error:
+                    self.show_error(error)
+            elif action == "disk":
+                def validate_size(value):
+                    minimum = max(50, image["min_disk_gib"] if image else 50)
+                    if not value.isdigit() or not minimum <= int(value) <= 30720:
+                        raise core.NebiusError(f"Choose a disk size between {minimum} and 30720 GiB")
+                    return value
+                try:
+                    disk_gib = int(self.edit("Boot disk (GiB)", str(disk_gib), validate=validate_size,
+                                            notes=["Storage remains billable while the VM is stopped."]))
+                except Back:
+                    pass
             elif action == "allocation":
                 self.toggle_allocation()
             elif action == "project":
-                projects = next((item["projects"] for item in self.capacity["offerings"] if item["offering_id"] == offering["offering_id"]), [])
+                projects = offering.get("projects", [])
                 try:
                     project_id = self.menu("Place VM in", [(p["project_name"], p["region"], p["project_id"]) for p in projects])
+                    image = None
                 except Back:
                     pass
             else:
                 try:
-                    plan = self.read("Running preflight checks", "plan", "--offering-id", offering["offering_id"],
-                                     "--project-id", project_id, "--name", name, "--allocation", self.allocation)
+                    selected = catalog.resolve_variant(offering, project_id, self.allocation,
+                                                       image["compatible_offering_ids"] if image else None)
+                    plan = self.read("Running preflight checks", "plan", "--offering-id", selected["offering_id"],
+                                     "--project-id", project_id, "--name", name, "--allocation", self.allocation,
+                                     "--image-id", image["image_id"] if image else "", "--disk-gib", str(disk_gib))
                     check = plan["preflight"]
                     if not check["ready"]:
                         self.message("Preflight blocked creation", check["message"] + "\n\n" + check["recovery"] +
@@ -776,6 +832,8 @@ class App:
                         f"  Estimate:   {price}",
                         "No automatic stop is scheduled. Stop the VM manually when finished. Disks remain billable until deleted.",
                     ]
+                    source = plan.get("boot_image", {"label": core.IMAGE_FAMILY, "note": ""})
+                    notes.insert(1, f"Boot image\n  {source['label']}\n  {plan.get('image_id') or plan.get('image_family', '')}\n  {source['note']}")
                     notes.append("Network: static public IP; inbound SSH (TCP 22) only. Use Ports for local application access.")
                     if plan.get("reusable_disk"):
                         notes.insert(1, f"Boot disk\n  Reuse boot disk: {plan['reusable_disk']['name']}\n  No new disk will be created.")
@@ -1154,7 +1212,7 @@ class App:
                 refresh = False
             vms = [vm for vm in self.inventory.get("vms", []) if not jump or vm["state"] == "running"]
             rows = [(f"{vm['name']} · {vm['state'].upper()}" + (" · saved state" if vm.get("stale") else ""),
-                     f"{vm['platform'].removeprefix('gpu-').upper()} · {vm['region']} · {allocation_label(vm['allocation'])}\n"
+                     f"{catalog.gpu_name(vm['platform'])} · {vm['region']} · {allocation_label(vm['allocation'])}\n"
                      f"Project: {vm['project_name']}", vm, "Virtual machines") for vm in vms]
             if not jump:
                 rows += [(item["name"] + " · LAUNCH UNCONFIRMED", item["project"]["region"] + " · check this request; not a VM health status", {"recovery": item}, "Launch requests")
