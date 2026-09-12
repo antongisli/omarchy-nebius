@@ -80,7 +80,8 @@ def add(vm_id, remote_port, local_port=None, username=None):
         validate_local_port(local)
         install()
         item = {"id": secrets.token_hex(8), "vm_id": vm_id, "vm_name": vm["name"], "username": user,
-                "managed": vm.get("managed", False), "address": vm.get("public_ip") or vm.get("private_ip"),
+                "managed": vm.get("managed", False), "ssh_identity": vm.get("ssh_identity", "default"),
+                "address": vm.get("public_ip") or vm.get("private_ip"),
                 "local_port": local, "remote_port": remote, "enabled": True}
         core._atomic_json(core.STATE_DIR / "ports.json", saved + [item])
     return item
@@ -134,8 +135,7 @@ def ssh_command(item, address, control):
                "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes", "-o", "ControlMaster=yes",
                "-o", "ControlPersist=no", "-S", str(control),
                "-L", f"127.0.0.1:{item['local_port']}:127.0.0.1:{item['remote_port']}"]
-    if item.get("managed"):
-        command += ["-o", "IdentitiesOnly=yes", "-i", str(core.SSH_KEY)]
+    command += core.ssh_identity_options(item)
     return command + [item["username"] + "@" + address]
 
 
@@ -180,7 +180,8 @@ def serve():
                         state = str(resource.get("status", {}).get("state", "")).lower()
                         interfaces = resource.get("status", {}).get("network_interfaces", [])
                         address = next((str(n.get("public_ip_address", {}).get("address") or n.get("ip_address", {}).get("address") or "").split("/")[0] for n in interfaces), "")
-                        cache[vm_id] = {"state": state, "address": address, "checked": time.monotonic()}
+                        cache[vm_id] = {"state": state, "address": address, "checked": time.monotonic(),
+                                        "ssh_identity": core.ssh_identity_for_instance(resource)}
                     except Exception as error:
                         cache[vm_id] = {**cache.get(vm_id, {}), "checked": time.monotonic(), "error": str(error)}
                         if "notfound" in str(error).lower() or "not found" in str(error).lower():
@@ -218,7 +219,8 @@ def serve():
                     control.unlink(missing_ok=True)
                     log = (root / (key + ".log")).open("w")
                     try:
-                        process = subprocess.Popen(ssh_command(item, address, control), stdin=subprocess.DEVNULL,
+                        connection = {**item, "ssh_identity": info.get("ssh_identity", item.get("ssh_identity", "default"))}
+                        process = subprocess.Popen(ssh_command(connection, address, control), stdin=subprocess.DEVNULL,
                                                    stdout=subprocess.DEVNULL, stderr=log)
                     except (OSError, ValueError) as error:
                         log.close()
