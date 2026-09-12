@@ -131,6 +131,7 @@ class InteractionTests(unittest.TestCase):
         second = {**VM, "id": "computeinstance-second", "name": "second"}
         application.inventory = {"vms": [VM, second]}
         with patch.object(application, "ports") as ports, patch.object(application, "active_job", return_value=None), \
+             patch.object(ui.inventory_view.Poller, "poll", side_effect=lambda snapshot, entries, **kwargs: snapshot), \
              patch.object(application, "read", return_value=application.inventory):
             application.overview()
         ports.assert_called_once_with(second)

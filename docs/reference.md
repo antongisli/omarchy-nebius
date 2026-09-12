@@ -134,6 +134,8 @@ Use arrows or `j/k`, Enter, Escape/back, and `/` search throughout the terminal.
 
 For natural-language use, choose Codex or Claude Code in Omarchy, sign in to that agent, and start a new agent session to load the updated tools. Ask “show GPU capacity” or “get me a VM and put me in it.” The agent presents GPU choices before project placement, shows the plan, asks for a normal confirmation, and relies on write-tool approval instead of a typed magic phrase.
 
+VM lists refresh local job state every two seconds and fetch cloud inventory asynchronously (every five seconds while work is active, otherwise every thirty seconds, and on operation completion). Rows show Creating, Starting, Stopping, Deleting, or Waiting for SSH as appropriate. Confirmed deletion removes the row immediately; failed operations retain the VM. Navigation and search remain intact during refresh. Failed reads keep the last known inventory and show retry feedback. Pressing the same lifecycle action during an active operation follows its existing job.
+
 ## SSH after reinstall
 
 Keep the dedicated SSH key when uninstalling to retain access to existing VMs. SSH and port forwarding offer that key again for VMs carrying this plugin's creation label, even without a local VM record. Your configured SSH agent remains available for these older VMs; unrelated VMs use their normal SSH configuration.
