@@ -40,10 +40,15 @@ class SSHReadinessTests(unittest.TestCase):
 
     def test_first_connection_retries_boot_and_key_installation(self):
         progress = Mock()
-        result, process = self.run_probe([(255, "Connection refused"), (255, "Permission denied (publickey)."), (0, "")], progress=progress)
+        attempts = []
+        result, process = self.run_probe([(255, "Connection refused"), (255, "Permission denied (publickey)."), (0, "")], progress=progress, record=attempts.append)
+        self.assertEqual([row["outcome"] for row in attempts], ["not_ready", "not_ready", "ready"])
+        self.assertEqual([row["attempt"] for row in attempts], [1, 2, 3])
+        self.assertTrue(all(row["connect_timeout_seconds"] == 2 for row in attempts))
         self.assertTrue(result)
         self.assertEqual(process.call_count, 3)
-        self.assertGreaterEqual(self.clock, 4)
+        self.assertGreaterEqual(self.clock, 1)
+        self.assertLess(self.clock, 1.4)
         self.assertTrue(any("SSH key" in call.args[0] for call in progress.call_args_list))
 
     def test_probe_preserves_identity_and_host_key_checks(self):
@@ -52,6 +57,7 @@ class SSHReadinessTests(unittest.TestCase):
         for value in ("BatchMode=yes", "HostKeyAlias=computeinstance-test", "StrictHostKeyChecking=accept-new", "/key"):
             self.assertIn(value, command)
         self.assertNotIn("StrictHostKeyChecking=no", command)
+        self.assertIn("ConnectTimeout=2", ssh.probe_command(self.connection, connect_timeout=2))
 
     def test_changed_host_key_is_not_retried(self):
         with self.assertRaisesRegex(ssh.SSHError, "IDENTIFICATION HAS CHANGED"):

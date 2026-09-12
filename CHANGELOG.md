@@ -2,6 +2,10 @@
 
 ## Unreleased · Image picker and GPU grouping
 
+- The timing stage is named SSH ready. Initial probes retry after 0.5 seconds
+  with a 2-second connection timeout, returning to patient retries after 30 seconds.
+  Saved details include connection preparation and individual probe attempts.
+
 - VM lists update operation states immediately and refresh cloud inventory in the
   background. Completed deletions disappear without pressing refresh; navigation
   and search remain in place, and failed reads retain the last known inventory.

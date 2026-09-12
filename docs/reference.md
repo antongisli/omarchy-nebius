@@ -136,6 +136,8 @@ For natural-language use, choose Codex or Claude Code in Omarchy, sign in to tha
 
 VM lists refresh local job state every two seconds and fetch cloud inventory asynchronously (every five seconds while work is active, otherwise every thirty seconds, and on operation completion). Rows show Creating, Starting, Stopping, Deleting, or Waiting for SSH as appropriate. Confirmed deletion removes the row immediately; failed operations retain the VM. Navigation and search remain intact during refresh. Failed reads keep the last known inventory and show retry feedback. Pressing the same lifecycle action during an active operation follows its existing job.
 
+The **SSH ready** stage starts after the VM is observed running with an address and ends after a successful authenticated command. It includes remaining guest startup and connection preparation, as well as probe attempts; it is not solely SSH handshake time. During the first 30 seconds, probes use a two-second connection timeout and retry after half a second; later attempts allow five seconds and retry after two seconds. The saved launch details include `ssh_probe.preparation_seconds` and per-attempt durations and outcomes. Readiness still requires successful authentication.
+
 ## SSH after reinstall
 
 Keep the dedicated SSH key when uninstalling to retain access to existing VMs. SSH and port forwarding offer that key again for VMs carrying this plugin's creation label, even without a local VM record. Your configured SSH agent remains available for these older VMs; unrelated VMs use their normal SSH configuration.

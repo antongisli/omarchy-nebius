@@ -2,7 +2,7 @@
 import datetime as dt
 
 LABELS = {'checking': 'Check request', 'preflight': 'Check configuration', 'disk': 'Boot disk',
-          'instance': 'Create VM', 'boot': 'VM running and address', 'ssh': 'SSH login',
+          'instance': 'Create VM', 'boot': 'VM running and address', 'ssh': 'SSH ready',
           'start': 'Start VM', 'stop': 'Stop VM', 'delete': 'Delete resources',
           'project': 'Create project', 'network': 'Network ready'}
 
