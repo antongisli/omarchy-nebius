@@ -2,6 +2,10 @@
 
 ## Unreleased · Image picker and GPU grouping
 
+- Deletion verifies your Nebius identity against VM creation audit history instead
+  of requiring a local plugin record. Existing VMs remain deletable after reinstall;
+  confirmation identifies the exact boot disk and secondary disks are kept.
+
 - VM settings can select existing public and accessible custom images for the
   chosen region and machine, with compatibility details and editable disk size.
 - Image access, region, hardware restrictions, readiness and disk fit are checked

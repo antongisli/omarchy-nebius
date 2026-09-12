@@ -301,10 +301,10 @@ class ComputeTests(unittest.TestCase):
             with self.assertRaisesRegex(core.NebiusError, "Invalid SSH username"):
                 core.connect_vm("computeinstance-existing", launch=False, username="-oProxyCommand=evil")
 
-    def test_external_vm_delete_is_rejected_without_cli_calls(self):
+    def test_external_vm_delete_requires_confirmation_without_cli_calls(self):
         with patch.object(core, "run_cli") as cli:
             with self.assertRaises(core.NebiusError):
-                core.delete_vm("computeinstance-external", True)
+                core.delete_vm("computeinstance-external", False)
             cli.assert_not_called()
 
     def test_mcp_advertises_allocation_and_uses_generic_names(self):
@@ -581,13 +581,13 @@ class ComputeTests(unittest.TestCase):
         core._save_registry({"vms": [vm]})
         instance = {"spec": {"boot_disk": {"existing_disk": {"id": plan["disk_id"]}}}}
         disk["status"]["read_write_attachment"] = "computeinstance-other"
-        with patch.object(core, "_refresh_vm"), patch.object(core, "_accessible_vm", return_value=(instance, vm)), \
-             patch.object(core, "run_cli", side_effect=[{"id": "operation-delete"}, {"status": {}}, disk]) as cli:
+        with patch.object(core, "_verify_deletion_owner", return_value={"tenant_id": "tenant-test", "subject_id": "tenantuseraccount-test"}), patch.object(core, "_accessible_vm", return_value=(instance, vm)), \
+             patch.object(core, "run_cli", side_effect=[disk, {"id": "operation-delete"}, {"status": {}}, disk]) as cli:
             with self.assertRaisesRegex(core.NebiusError, "not safe to delete"):
                 core.delete_vm(vm["id"], True)
         self.assertTrue(core._registered(vm["id"])["instance_deleted"])
         self.assertEqual([call.args[0][:3] for call in cli.call_args_list],
-                         [["compute", "instance", "delete"], ["compute", "instance", "operation"], ["compute", "disk", "get"]])
+                         [["compute", "disk", "get"], ["compute", "instance", "delete"], ["compute", "instance", "operation"], ["compute", "disk", "get"]])
 
     def test_delete_vm_deletes_only_confirmed_boot_disk_after_live_checks(self):
         plan, disk = self.rejected_launch()
@@ -596,8 +596,8 @@ class ComputeTests(unittest.TestCase):
         core._save_registry({"vms": [vm]})
         instance = {"spec": {"boot_disk": {"existing_disk": {"id": plan["disk_id"]}},
                              "secondary_disks": [{"existing_disk": {"id": "computedisk-preserved"}}]}}
-        with patch.object(core, "_refresh_vm"), patch.object(core, "_accessible_vm", return_value=(instance, vm)), \
-             patch.object(core, "run_cli", side_effect=[{"id": "operation-vm"}, {"status": {}}, disk, {}, {"id": "operation-disk"}, {"status": {}}]) as cli, \
+        with patch.object(core, "_verify_deletion_owner", return_value={"tenant_id": "tenant-test", "subject_id": "tenantuseraccount-test"}), patch.object(core, "_accessible_vm", return_value=(instance, vm)), \
+             patch.object(core, "run_cli", side_effect=[disk, {"id": "operation-vm"}, {"status": {}}, disk, {}, {"id": "operation-disk"}, {"status": {}}]) as cli, \
              patch.object(core, "HOME", core.STATE_DIR), patch.object(core.subprocess, "run"):
             result = core.delete_vm(vm["id"], True)
         self.assertTrue(result["disk_deleted"])

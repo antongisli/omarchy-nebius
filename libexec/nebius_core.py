@@ -1717,6 +1717,8 @@ def list_managed_vms() -> dict[str, Any]:
     for registered in _registry()["vms"]:
         if not isinstance(registered, dict) or not str(registered.get("id") or "").startswith("computeinstance-"):
             continue
+        if registered.get("deletion_only"):
+            continue
         vm_id = str(registered["id"])
         try:
             item = run_cli(["compute", "instance", "get", vm_id, "--format", "json"])
@@ -1748,7 +1750,7 @@ def list_managed_vms() -> dict[str, Any]:
 
 
 def ssh_identity_for_instance(item: dict[str, Any]) -> str:
-    # Cloud provenance survives reinstall; local mutation ownership does not.
+    # Cloud provenance survives reinstall and selects the retained SSH key.
     labels = item.get("metadata", {}).get("labels") or {}
     return "nebius" if labels.get("managed-by") == MANAGED_BY else "default"
 
@@ -1772,7 +1774,7 @@ def _vm_summary(item: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]
                       for row in interfaces if row.get("public_ip_address", {}).get("address")), "")
     private_ip = next((str(row.get("ip_address", {}).get("address") or "").split("/")[0]
                        for row in interfaces if row.get("ip_address", {}).get("address")), "")
-    managed = bool(registered) and (metadata.get("labels") or {}).get("managed-by") == MANAGED_BY
+    managed = bool(registered) and not registered.get("deletion_only") and (metadata.get("labels") or {}).get("managed-by") == MANAGED_BY
     recovery_id = next((pending["plan_id"] for pending in _pending_launches()
                         if not registered and pending["plan_id"] == (metadata.get("labels") or {}).get("request-id")
                         and pending["project"]["project_id"] == project["project_id"]
@@ -1790,7 +1792,9 @@ def _vm_summary(item: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]
         "platform": resources.get("platform") or "CPU", "preset": resources.get("preset") or "",
         "allocation": "preemptible" if spec.get("preemptible") else "on_demand",
         "public_ip": public_ip, "private_ip": private_ip, "ssh_user": username,
-        "managed": managed, "can_delete": managed, "recovery_id": recovery_id,
+        "managed": managed, "can_delete": not bool(status.get("managed_by") or spec.get("forbid_deletion")),
+        "disk_id": spec.get("boot_disk", {}).get("existing_disk", {}).get("id", ""),
+        "recovery_id": recovery_id,
         "ssh_identity": ssh_identity_for_instance(item),
     }
 
@@ -2023,20 +2027,75 @@ def vm_storage(vm_id: str) -> dict[str, Any]:
                       "state": disk.get("status", {}).get("state", "unknown"),
                       "boot": disk_id == instance.get("spec", {}).get("boot_disk", {}).get("existing_disk", {}).get("id")})
     return {"vm": vm["name"], "disks": disks,
-            "note": "Attached disks remain billable when the VM stops. Delete VM and boot disk removes only the plugin's boot disk; secondary disks are kept."}
+            "note": "Attached disks remain billable when the VM stops. Delete VM and boot disk removes the reviewed boot disk; secondary disks are kept."}
+
+
+def _verify_deletion_owner(instance: dict[str, Any], vm: dict[str, Any]) -> dict[str, str]:
+    """Use cloud creation evidence, not a plugin label or a local install record."""
+    tenant_id = profile_value("tenant-id")
+    subject_id = _tenant_user_id(tenant_id)
+    metadata = instance.get("metadata", {})
+    if metadata.get("id") != vm["id"] or metadata.get("parent_id") != vm["project_id"]:
+        raise NebiusError("The VM identity changed; refresh Your VMs before deleting")
+    if instance.get("status", {}).get("managed_by") or instance.get("spec", {}).get("forbid_deletion"):
+        raise NebiusError("This VM is service-managed or protected against deletion")
+    try:
+        created = dt.datetime.fromisoformat(metadata["created_at"].replace("Z", "+00:00"))
+    except (KeyError, ValueError, TypeError):
+        raise NebiusError("Cannot verify who created this VM: its creation time is unavailable")
+    audit_filter = (f"type = 'ai.nebius.compute.computeinstance.create' AND resource.metadata.id = '{vm['id']}' "
+                    f"AND authentication.subject.tenant_user_id = '{subject_id}'")
+    events = _items(run_cli([
+        "audit", "v2", "audit-event", "list", "--parent-id", tenant_id, "--region", vm["region"],
+        "--start", (created - dt.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "--end", min(created + dt.timedelta(days=1), dt.datetime.now(dt.timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "--event-type", "control_plane", "--filter", audit_filter, "--all", "--format", "json",
+    ], timeout=90))
+    if not any(event.get("type") == "ai.nebius.compute.computeinstance.create"
+               and event.get("status") == "DONE"
+               and event.get("resource", {}).get("metadata", {}).get("id") == vm["id"]
+               and event.get("authentication", {}).get("subject", {}).get("tenant_user_id") == subject_id
+               for event in events):
+        raise NebiusError("Could not verify that you created this VM. No resources were changed. "
+                          "Check ownership in the Nebius console; creation audit history may be unavailable.")
+    return {"tenant_id": tenant_id, "subject_id": subject_id}
 
 
 @cloud_mutation
-def delete_vm(vm_id: str, confirmed: bool) -> dict[str, Any]:
+def delete_vm(vm_id: str, confirmed: bool, expected_disk_id: str | None = None) -> dict[str, Any]:
     if confirmed is not True:
         raise NebiusError("Deletion requires an explicit confirmation")
-    vm = _registered(vm_id)
+    vm = next((row for row in _registry()["vms"] if row.get("id") == vm_id), {})
+    if not vm.get("deletion_owner"):
+        instance, live = _accessible_vm(vm_id)
+        owner = _verify_deletion_owner(instance, live)
+        disk_id = instance.get("spec", {}).get("boot_disk", {}).get("existing_disk", {}).get("id", "")
+        reviewed_disk = expected_disk_id if expected_disk_id is not None else vm.get("disk_id")
+        if reviewed_disk is None or disk_id != reviewed_disk:
+            raise NebiusError("The VM's boot disk is not the reviewed disk. Refresh its details before deleting; no resources were changed")
+        if disk_id:
+            disk = run_cli(["compute", "disk", "get", disk_id, "--format", "json"], timeout=25)
+            if (disk.get("metadata", {}).get("id") != disk_id
+                    or disk.get("metadata", {}).get("parent_id") != live["project_id"]
+                    or disk.get("spec", {}).get("forbid_deletion") or disk.get("status", {}).get("managed_by")):
+                raise NebiusError("The boot disk is protected or outside this VM's project; no resources were changed")
+        # This is a confirmed deletion journal, not adoption or SSH ownership.
+        vm = {**live, "disk_id": disk_id, "deletion_owner": owner, "deletion_only": not live.get("managed")}
+        _update_vm_record(vm_id, vm)
+    else:
+        owner = vm["deletion_owner"]
+        tenant_id = profile_value("tenant-id")
+        if owner != {"tenant_id": tenant_id, "subject_id": _tenant_user_id(tenant_id)}:
+            raise NebiusError("This deletion belongs to another Nebius account or tenant")
+        if vm["project_id"] not in {p["project_id"] for p in sync_personal_projects()["projects"]}:
+            raise NebiusError("This VM is outside your personal projects in the selected tenant")
+        if expected_disk_id is not None and expected_disk_id != vm.get("disk_id"):
+            raise NebiusError("The confirmed boot disk differs from the pending deletion")
     if not vm.get("instance_deleted"):
         pending = _read_json(_cloud_operation_path(vm_id), {})
         if not pending:
-            _refresh_vm(vm_id)
             instance, _ = _accessible_vm(vm_id)
-            if instance.get("spec", {}).get("boot_disk", {}).get("existing_disk", {}).get("id") != vm.get("disk_id"):
+            if instance.get("spec", {}).get("boot_disk", {}).get("existing_disk", {}).get("id", "") != vm.get("disk_id"):
                 raise NebiusError("The VM's boot disk changed. Inspect its storage before deleting; no resources were changed")
         _write_operation("running", "delete", f"Deleting {vm.get('name')}", vm_id=vm_id)
         _compute_mutation("instance", "delete", vm_id)
@@ -2049,10 +2108,7 @@ def delete_vm(vm_id: str, confirmed: bool) -> dict[str, Any]:
     elif disk_id.startswith("computedisk-"):
         disk = run_cli(["compute", "disk", "get", disk_id, "--format", "json"], timeout=25)
         metadata, status = disk.get("metadata", {}), disk.get("status", {})
-        labels = metadata.get("labels") or {}
         if (metadata.get("id") != disk_id or metadata.get("parent_id") != vm["project_id"]
-                or labels.get("managed-by") != MANAGED_BY or not labels.get("request-id")
-                or (vm.get("source_request_id") and labels.get("request-id") != vm["source_request_id"])
                 or status.get("read_write_attachment") or status.get("read_only_attachments")
                 or status.get("reconciling") or status.get("lock_state") or status.get("managed_by")
                 or disk.get("spec", {}).get("forbid_deletion")):
@@ -2180,6 +2236,7 @@ def parse_args() -> argparse.Namespace:
     delete = sub.add_parser("delete")
     delete.add_argument("--vm-id", required=True)
     delete.add_argument("--confirmed", action="store_true")
+    delete.add_argument("--expected-disk-id", help="Exact boot disk shown in the deletion review; empty for no boot disk")
     disk_delete = sub.add_parser("delete-disk")
     disk_delete.add_argument("--disk-id", required=True)
     disk_delete.add_argument("--confirmed", action="store_true")
@@ -2232,7 +2289,7 @@ def main() -> int:
         elif args.command == "stop":
             value = stop_vm(args.vm_id, automatic=args.automatic)
         elif args.command == "delete":
-            value = delete_vm(args.vm_id, args.confirmed)
+            value = delete_vm(args.vm_id, args.confirmed, args.expected_disk_id)
         elif args.command == "delete-disk":
             value = delete_saved_disk(args.disk_id, args.confirmed)
         elif args.command == "storage":
