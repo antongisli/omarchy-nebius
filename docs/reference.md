@@ -69,20 +69,20 @@ respected. A failure after submission never triggers a second automatic launch.
 - Opens from the last successful capacity snapshot immediately; `R` requests a live refresh and falls back visibly if Nebius times out.
 - Lets the user choose the GPU type and region first, then uses only projects created by that user (plus the preferred profile project and plugin-created projects).
 - If that region has no personal project, proposes the editable name `gpu-<region>`, with Nebius's default network and subnet, before a normal confirmation. A project can hold any Nebius resources.
-- Press `P` to toggle on-demand/preemptible and edit the proposed VM name.
+- Press `P` to toggle on-demand/preemptible. Edit the proposed VM name in VM settings.
 - Checks regional SSD quota before project creation. VM review and confirmed creation both run live, read-only preflight: project-specific platform/preemptible eligibility, GPU preset/count, capacity advice, READY subnet, boot-image readiness/size, name conflicts, SSD quota and regular PAYG GPU quota. Critical unavailable checks block VM allocation. CLI JSON validation still runs before allocating a disk.
 - Preflight is not a reservation, a complete CPU/network quota audit, or proof of create permissions. Unreported capacity is disclosed. Regular PAYG GPU quotas are not applied to preemptibles. New-project placement cannot verify project-specific eligibility until the project exists; that project remains if later VM checks fail.
-- Shows the exact configuration, allocation, 200 GiB boot disk, price estimate and manual-stop reminder before creation. Small terminals page through all billing terms before confirmation is enabled. Escape returns to editing.
-- Uses Ubuntu 24.04 with CUDA 13.0 and the plugin's dedicated SSH key.
+- Shows the exact configuration, allocation, selected boot disk size, price estimate and manual-stop reminder before creation. The boot disk defaults to 200 GiB and grows to fit the selected image. Small terminals page through all billing terms before confirmation is enabled. Escape returns to editing.
+- Defaults to Ubuntu 24.04 with CUDA 13.0; **Boot image** offers public and custom images. New VMs use the plugin's dedicated SSH key.
 - Auto-stop was removed in v0.5.4. No timer is installed on create, start or recovery. Stop VMs manually when finished. Old plans that promised auto-stop must be reviewed again; obsolete automatic-stop invocations are harmless no-ops.
-- Never deletes automatically. Deletion uses a clear destructive confirmation and removes the plugin-created boot disk too.
+- Never deletes automatically. Deletion requires explicit confirmation, verifies the signed-in user as the VM creator through cloud audit history, and removes only the exact reviewed boot disk after safety checks. Secondary disks are kept.
 - Launch and start complete only after an authenticated SSH probe succeeds. Per-stage durations and total time from submission to verified SSH are saved in each job and displayed on a persistent result screen. Press `C` to SSH; the report remains when you return. Reopen it through `A` Activity or VM actions → Launch timings. Older jobs explicitly show when timings were not recorded.
 - Shows stage and elapsed time in a persistent terminal. `Esc` or `B` returns to the overview; a detached worker continues even if the terminal closes. `A` follows progress and shows the result.
 - Shows existing VMs in personal projects. External VMs use your SSH keys/agent and may need a login username; a private-only address needs a network route or VPN. Cloud visibility does not guarantee SSH access.
 - Keeps uncertain creates as **Launch unconfirmed** requests, separately below actual VMs, not as VM health states. Recheck to restore the exact request-labelled VM's management and SSH access. Recovery does not schedule a stop.
 - CLI JSON rejections and the specifically recognized server preemptible-eligibility rejection are different from timeouts. **Check for a rejected request** verifies the recorded failure and live disk ownership/attachments, clears only that false recovery block, and preserves the disk as **Boot disk available**. The next compatible launch in that project reviews and reuses the disk; no extra SSD quota or second boot disk is needed. Other remote errors remain uncertain.
 - If recovery remains uncertain, inspect the project in the Nebius console. Archiving requires explicit confirmation and only removes the local duplicate-launch guard; it does not clean up any billable resources.
-- Failed boot-disk deletion stays visible as **disk remains**, with a cleanup retry action. Delete is limited to plugin-registered resources.
+- Failed boot-disk deletion stays visible as **disk remains**, with a cleanup retry action. VM deletion is limited to visible personal projects and verified creator ownership—not plugin registration. Missing or inaccessible creation audit history blocks deletion; use the Nebius console to resolve it.
 - Select a saved boot disk to reuse, inspect, or permanently delete it. Cleanup requires explicit confirmation and live checks for ownership, attachments (including stopped VMs), locks, readiness and deletion protection. Nothing is deleted automatically.
 - VM actions include **Disks and storage**, manual start/stop and confirmed deletion.
 - The VM overview exposes `C` SSH, `P` SSH port forwarding, `S` stop, `T` start, and `D` review deletion for the highlighted VM. Selection is retained on return. Actions have visible letter keys; resource choices have number keys and search. Start/stop/delete use one review, with `S`/`T`/`D` confirmation after reading its terms and `Esc` cancellation. Enter pages through deletion terms but never deletes.
@@ -124,7 +124,7 @@ Use arrows or `j/k`, Enter, Escape/back, and `/` search throughout the terminal.
 - `P` — SSH port forwarding in the launcher, manager or VM list. In capacity, configuration and VM settings, it toggles the highlighted **On-demand / Preemptible** switch instead. Capacity views update immediately from the same snapshot; use `R` for fresh data.
 - `G` — choose a GPU family, select its region/configuration, choose project placement, review, and confirm creation.
 - `Shift+J` — search running VMs and connect (lowercase `j` moves down).
-- `V` — overview, connect, start/stop; explicitly delete plugin-owned VMs.
+- `V` — overview, connect, start/stop; review deletion of VMs you created in visible personal projects.
 - In **Your VMs**, Enter opens the selected resource's actions. In **Jump**, Enter connects and `M` opens actions for the highlighted VM. Deletion has one review: Enter pages through the exact resources/data-loss warning, `D` confirms only after all terms are visible, and Esc cancels. Secondary disks are kept.
 - `A` — progress, result and full diagnostic details.
 - `S` — account/reconnect.
@@ -179,7 +179,7 @@ bin/nebius-status --probe --json | jq
 
 The repository layout is compatible with Omarchy Quattro and the official marketplace: one root `manifest.json`, README, MIT license, and `preview.png`. The intended listing metadata is **Developer Tools** with the `ai`, `bar`, and `launcher` tags.
 
-A local working-tree check of 0.7.6 on September 12, 2026, using marketplace analyzer commit `3942261b4943d19359b84e01be149491b800d3bc`, found no flagged patterns. Installer, privilege and service-management capabilities require review. This is development evidence, not marketplace approval: every published snapshot needs a fresh exact-commit scan and explicit maintainer approval. No marketplace submission has been made. The submission owner must confirm rights to the code and preview assets; the MIT copyright notice currently names Nebius.
+Every submitted snapshot needs a fresh exact-commit scan with the marketplace's scanner and explicit maintainer approval. Installer, privilege and service-management capabilities require review; a clean static scan is not a security certification or marketplace approval. See the [0.8.0 release checks](releases/0.8.0.md) for release-specific evidence and remaining checks. The submission owner must confirm rights to the code and preview assets; attribution alone does not establish permission.
 
 ## Security boundary
 

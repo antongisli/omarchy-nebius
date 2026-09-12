@@ -1,6 +1,13 @@
 # Release notes
 
-## Unreleased · Image picker and GPU grouping
+## 0.8.0 · 2026-09-12 · Public beta · Images and VM lifecycle
+
+- Added a short account and billing signup guide; clarified image defaults,
+  keyboard shortcuts and ownership checks for VM deletion.
+- Refreshed documentation captures and fixed blank embedded panels in Qt's
+  offscreen cover renderer, with a regression test for preserved terminal cells.
+- Fixed new-VM networking: use `eth0` instead of the reserved interface name
+  `default`, which caused guest IPv4 setup and first SSH to fail.
 
 - The timing stage is named SSH ready. Initial probes retry after 0.5 seconds
   with a 2-second connection timeout, returning to patient retries after 30 seconds.

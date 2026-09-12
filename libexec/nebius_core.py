@@ -1437,7 +1437,7 @@ def _instance_request(plan: dict[str, Any], disk_id: str, *, cloud_init: str | N
             "boot_disk": {"attach_mode": "READ_WRITE", "existing_disk": {"id": disk_id}},
             "network_interfaces": [
                 {
-                    "name": "default",
+                    "name": "eth0",
                     "subnet_id": plan["subnet_id"],
                     "ip_address": {},
                     "public_ip_address": {"static": True},

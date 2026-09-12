@@ -15,6 +15,7 @@ from html import escape
 from pathlib import Path
 import sys
 from unittest.mock import patch
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "libexec"))
@@ -162,8 +163,23 @@ def render(width=80, height=30, allocation="on_demand", surface="capacity"):
 
 def render_cover():
     """Keep the branded cover, with two current production terminal screens."""
-    capacity = render(80, 28, surface="capacity").replace('<svg ', '<svg x="32" y="196" ', 1)
-    form = render(52, 28, surface="port-form").replace('<svg ', '<svg x="872" y="196" ', 1)
+    def panel(width, height, surface, x, y):
+        # Qt's SVG Tiny renderer silently drops nested <svg> elements. Flatten
+        # the terminal viewport into a translated group, keeping its cell sizes.
+        document = ET.fromstring(render(width, height, surface=surface))
+        namespace = "http://www.w3.org/2000/svg"
+        ET.register_namespace("", namespace)
+        group = ET.Element(f"{{{namespace}}}g", {"transform": f"translate({x} {y})"})
+        for child in document:
+            # Percentages would otherwise refer to the entire cover viewport.
+            if child.tag == f"{{{namespace}}}rect" and child.get("width") == "100%":
+                child.set("width", document.attrib["width"])
+                child.set("height", document.attrib["height"])
+            group.append(child)
+        return ET.tostring(group, encoding="unicode")
+
+    capacity = panel(80, 28, "capacity", 32, 196)
+    form = panel(52, 28, "port-form", 872, 196)
     return ('<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="896" viewBox="0 0 1440 896">'
             '<title>Nebius GPU: capacity and SSH ports, production interface with example data</title>'
             '<rect width="1440" height="896" fill="#E0FF4F"/>'
