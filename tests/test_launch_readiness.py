@@ -79,6 +79,7 @@ class LaunchReadinessTests(unittest.TestCase):
             self.assertEqual(core.current_operation()['stage'], 'ssh')
             self.assertEqual(core.current_operation()['phase'], 'running')
             kwargs['progress']('Waiting for SSH key', 2)
+            kwargs['record']({'attempt': 1, 'elapsed_seconds': 2, 'outcome': 'ready'})
             return True
         with patch.object(core, '_accessible_vm', return_value=({}, VM)), \
              patch.object(core, '_compute_mutation'), patch.object(core, '_wait_for_instance', return_value=VM), \
@@ -86,6 +87,8 @@ class LaunchReadinessTests(unittest.TestCase):
              patch.object(ssh, 'wait_ready', side_effect=probe):
             result = core.start_vm(VM['id'])
         self.assertTrue(result['ssh_ready'])
+        self.assertEqual(result['launch_timing']['ssh_probe']['attempts'][0]['outcome'], 'ready')
+        self.assertIn('preparation_seconds', result['launch_timing']['ssh_probe'])
         self.assertEqual(core.current_operation()['phase'], 'ready')
         self.assertEqual([row['stage'] for row in result['launch_timing']['timeline']], ['start', 'boot', 'ssh'])
 
@@ -130,7 +133,7 @@ class LaunchReadinessTests(unittest.TestCase):
             self.assertEqual(len(screen.frames), 2)
             for frame in screen.frames:
                 self.assertIn('Total to SSH ready: 23.0s', frame)
-                self.assertIn('SSH login: 4.0s', frame)
+                self.assertIn('SSH ready: 4.0s', frame)
                 self.assertIn('Boot disk: 6.0s', frame)
 
     def test_failed_launch_with_existing_vm_keeps_report_instead_of_returning_to_creation(self):
