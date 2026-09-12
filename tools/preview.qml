@@ -28,7 +28,7 @@ ShellRoot {
     Rectangle { anchors.fill: parent; color: "#E0FF4F" }
     Text {
       x: 40; y: 32
-      text: "Need a bigger GPU?"
+      text: "Need a bigger GPU? Hit a key."
       color: "#052B42"
       font.family: "sans-serif"
       font.pixelSize: 62
@@ -36,7 +36,7 @@ ShellRoot {
     }
     Text {
       x: 42; y: 111
-      text: "Find capacity. Launch a VM. Jump in."
+      text: "Simple launch. Simple SSH. Simple port forwarding."
       color: "#052B42"
       font.family: "sans-serif"
       font.pixelSize: 27

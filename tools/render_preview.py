@@ -137,8 +137,8 @@ def render_cover():
     return ('<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="896" viewBox="0 0 1440 896">'
             '<title>Nebius GPU: capacity and SSH ports, production interface with example data</title>'
             '<rect width="1440" height="896" fill="#E0FF4F"/>'
-            '<text x="40" y="94" font-family="sans-serif" font-size="62" font-weight="700" fill="#052B42">Need a bigger GPU?</text>'
-            '<text x="42" y="143" font-family="sans-serif" font-size="27" fill="#052B42">Find capacity. Launch a VM. Jump in.</text>'
+            '<text x="40" y="94" font-family="sans-serif" font-size="62" font-weight="700" fill="#052B42">Need a bigger GPU? Hit a key.</text>'
+            '<text x="42" y="143" font-family="sans-serif" font-size="27" fill="#052B42">Simple launch. Simple SSH. Simple port forwarding.</text>'
             '<rect x="24" y="181" width="1392" height="649" fill="#101820"/>'
             + capacity + form +
             '<path d="M848 207V804" stroke="#35454E"/>'

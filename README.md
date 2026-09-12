@@ -2,10 +2,10 @@
   <img src="assets/nebius-logo.svg" alt="Nebius" width="175">
 </p>
 
-<h1 align="center">Need a bigger GPU?</h1>
+<h1 align="center">Need a bigger GPU? Hit a key.</h1>
 
 <p align="center">
-  <strong>Find capacity. Launch a VM. Jump in.</strong><br>
+  <strong>Simple launch. Simple SSH. Simple port forwarding.</strong><br>
   Nebius cloud GPUs, a few keystrokes from your Omarchy desktop.
 </p>
 
