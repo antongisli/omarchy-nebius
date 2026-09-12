@@ -160,7 +160,7 @@ class ActivityHistoryTests(unittest.TestCase):
 
     def test_completed_activity_displays_a_result_without_an_extra_menu(self):
         job = self.save(result={"name": "h100"})
-        application, screen = app(["\n", "\n", "\x1b"], 48, 20)
+        application, screen = app(["\n", "\n", "\x1b", "\x1b"], 48, 20)
         with self.assertRaises(ui.Back):
             application.activity()
         frames = "\n".join(screen.frames)

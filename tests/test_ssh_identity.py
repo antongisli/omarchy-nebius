@@ -53,7 +53,7 @@ class SSHIdentityTests(unittest.TestCase):
         self.assertEqual(summary["ssh_user"], "dev")
         self.assertEqual(summary["ssh_identity"], "nebius")
         self.assertFalse(summary["managed"])
-        self.assertFalse(summary["can_delete"])
+        self.assertTrue(summary["can_delete"])
         connection = self.connection()
         command = connection["command"]
         self.assertEqual(command[command.index("-i") + 1], str(core.SSH_KEY))
@@ -67,7 +67,7 @@ class SSHIdentityTests(unittest.TestCase):
             core._registered(VM_ID)
         with patch.object(core, "run_cli") as cli:
             with self.assertRaises(core.NebiusError):
-                core.delete_vm(VM_ID, True)
+                core.delete_vm(VM_ID, False)
             cli.assert_not_called()
 
     def test_probe_and_interactive_ssh_offer_the_same_key_and_host_policy(self):

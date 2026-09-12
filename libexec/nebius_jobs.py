@@ -146,6 +146,19 @@ def submit(arguments, title=""):
     return {"job_id": job_id, "phase": "submitted", "pid": process.pid}
 
 
+def latest_vm_job(vm_id):
+    for job in jobs():
+        if job.get("command") not in {"create", "start"}:
+            continue
+        arguments = job.get("arguments", [])
+        target = (job.get("result") or {}).get("id") or job.get("operation", {}).get("vm_id")
+        if "--vm-id" in arguments and arguments.index("--vm-id") + 1 < len(arguments):
+            target = arguments[arguments.index("--vm-id") + 1]
+        if target == vm_id:
+            return job
+    return None
+
+
 def summary():
     entries = jobs()
     active = [j for j in entries if j["phase"] in {"queued", "running"}]

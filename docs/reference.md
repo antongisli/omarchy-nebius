@@ -21,6 +21,48 @@ The installer is re-runnable and does not edit `.zshrc`. It uses each agent's ow
 
 Omarchy supplies the ordinary terminal tools used by setup: Python, Bash, jq, curl, OpenSSH, fzf, gum and util-linux. Package installation runs visibly and may ask for your password; the plugin does not silently escalate privileges.
 
+## Image selection
+
+After choosing a GPU configuration and destination project, open **Boot image**
+in VM settings. The picker lists public images for the selected region and
+custom images in accessible projects of the configured tenant, including shared
+image projects. This does not add shared projects to the VM destination list.
+Search by name or image ID; press R to refresh. Listing failures are shown as
+incomplete discovery, while images from successful sources remain usable.
+
+Images must be READY and not reconciling. Known CPU-architecture mismatches,
+unsupported platforms, and unsupported presets are excluded. Current documented
+GPU platforms use AMD64 CPUs. Unknown architecture or absent GPU recommendations
+are shown explicitly; lack of a recommendation is not treated as an exclusion.
+An image must support cloud-init so the plugin can create the `dev` user and
+install the SSH key. GPU driver and workload compatibility cannot be proven from
+image metadata alone.
+
+Selecting an image pins its exact ID for this launch. Boot disk size grows to at
+least the image minimum and can be edited separately. Plans and final review
+show the source, disk size and price estimate. Live preflight rechecks access,
+region, compatibility, readiness and disk fit before allocation. Saved boot disks
+are reused only when their image ID/family and disk size match. The selection is
+local to the current launch; existing VMs are unaffected.
+
+For agents, `list_images` accepts offering IDs and a destination project ID;
+`plan_gpu_vm` accepts optional `image_id` and `disk_gib`. The CLI equivalents are
+`nebius_core.py images --offering-id ID --project-id ID` and
+`nebius_core.py plan --offering-id ID --project-id ID --image-id IMAGE_ID --disk-gib 256`.
+The selector uses images already present in Compute. It creates no image,
+import, bucket or publishing configuration.
+
+## GPU variant grouping
+
+Known RTX PRO 6000, L40S and B200 variants share product names. Equivalent
+configurations are grouped by tenant, region, GPU count, CPU count, RAM, GPU
+memory and CPU architecture. Availability shows the best reported pool, not a
+sum across potentially overlapping capacity advice. Actual platform, preset and
+fabric IDs are retained for placement, live preflight, pricing and API requests.
+After project/image selection, the plugin picks a matching variant by capacity,
+then estimated price on ties. Known project-level preemptible restrictions are
+respected. A failure after submission never triggers a second automatic launch.
+
 ## Default VM workflow
 
 - Reads regional Capacity Advisor data for the configured tenant while keeping shared project names out of the normal workflow.
@@ -34,6 +76,7 @@ Omarchy supplies the ordinary terminal tools used by setup: Python, Bash, jq, cu
 - Uses Ubuntu 24.04 with CUDA 13.0 and the plugin's dedicated SSH key.
 - Auto-stop was removed in v0.5.4. No timer is installed on create, start or recovery. Stop VMs manually when finished. Old plans that promised auto-stop must be reviewed again; obsolete automatic-stop invocations are harmless no-ops.
 - Never deletes automatically. Deletion uses a clear destructive confirmation and removes the plugin-created boot disk too.
+- Launch and start complete only after an authenticated SSH probe succeeds. Per-stage durations and total time from submission to verified SSH are saved in each job and displayed on a persistent result screen. Press `C` to SSH; the report remains when you return. Reopen it through `A` Activity or VM actions → Launch timings. Older jobs explicitly show when timings were not recorded.
 - Shows stage and elapsed time in a persistent terminal. `Esc` or `B` returns to the overview; a detached worker continues even if the terminal closes. `A` follows progress and shows the result.
 - Shows existing VMs in personal projects. External VMs use your SSH keys/agent and may need a login username; a private-only address needs a network route or VPN. Cloud visibility does not guarantee SSH access.
 - Keeps uncertain creates as **Launch unconfirmed** requests, separately below actual VMs, not as VM health states. Recheck to restore the exact request-labelled VM's management and SSH access. Recovery does not schedule a stop.
@@ -43,7 +86,7 @@ Omarchy supplies the ordinary terminal tools used by setup: Python, Bash, jq, cu
 - Select a saved boot disk to reuse, inspect, or permanently delete it. Cleanup requires explicit confirmation and live checks for ownership, attachments (including stopped VMs), locks, readiness and deletion protection. Nothing is deleted automatically.
 - VM actions include **Disks and storage**, manual start/stop and confirmed deletion.
 - The VM overview exposes `C` SSH, `P` SSH port forwarding, `S` stop, `T` start, and `D` review deletion for the highlighted VM. Selection is retained on return. Actions have visible letter keys; resource choices have number keys and search. Start/stop/delete use one review, with `S`/`T`/`D` confirmation after reading its terms and `Esc` cancellation. Enter pages through deletion terms but never deletes.
-- SSH waits up to 120 seconds for a real noninteractive login before opening the session, retrying transient boot/network failures and managed-VM key setup. Existing VMs that require interactive authentication can still open their normal SSH session. Host-key changes fail immediately. `Esc` cancels only the connection attempt. Failed or immediately closed sessions retain a retry screen and save the diagnostic in `ssh-last-error.json`; no VM is stopped.
+- SSH waits up to 120 seconds for a real noninteractive login before opening the session, retrying transient boot/network failures and managed-VM key setup. Interactive sessions open only after the same key/agent login succeeds in the probe. Password-only login is not verified by this workflow; configure an SSH key or use your own terminal. Host-key changes fail immediately. `Esc` cancels only the connection attempt. Failed or immediately closed sessions retain a retry screen and save the diagnostic in `ssh-last-error.json`; no VM is stopped.
 - The bar widget shows a small badge over the Nebius symbol: `0`–`9`, then `9+`, with the exact running VM count in the tooltip. It covers the same visible personal projects as **Your VMs**, including pre-existing VMs. Stopped VMs, failed requests and saved disks are not counted. Before setup completes, the badge is hidden and no VM polling runs. After setup, background refresh runs about every 30 seconds while connected; unknown, partial, failed or older-than-90-second results display `?`, never a false zero. Expired sessions retain the `?` badge with reconnect guidance. `R` refreshes it immediately.
 
 Stopped VMs stop incurring compute charges, but their disks remain billable until deleted.
@@ -91,6 +134,10 @@ Use arrows or `j/k`, Enter, Escape/back, and `/` search throughout the terminal.
 
 For natural-language use, choose Codex or Claude Code in Omarchy, sign in to that agent, and start a new agent session to load the updated tools. Ask “show GPU capacity” or “get me a VM and put me in it.” The agent presents GPU choices before project placement, shows the plan, asks for a normal confirmation, and relies on write-tool approval instead of a typed magic phrase.
 
+VM lists refresh local job state every two seconds and fetch cloud inventory asynchronously (every five seconds while work is active, otherwise every thirty seconds, and on operation completion). Rows show Creating, Starting, Stopping, Deleting, or Waiting for SSH as appropriate. Confirmed deletion removes the row immediately; failed operations retain the VM. Navigation and search remain intact during refresh. Failed reads keep the last known inventory and show retry feedback. Pressing the same lifecycle action during an active operation follows its existing job.
+
+The **SSH ready** stage starts after the VM is observed running with an address and ends after a successful authenticated command. It includes remaining guest startup and connection preparation, as well as probe attempts; it is not solely SSH handshake time. During the first 30 seconds, probes use a two-second connection timeout and retry after half a second; later attempts allow five seconds and retry after two seconds. The saved launch details include `ssh_probe.preparation_seconds` and per-attempt durations and outcomes. Readiness still requires successful authentication.
+
 ## SSH after reinstall
 
 Keep the dedicated SSH key when uninstalling to retain access to existing VMs. SSH and port forwarding offer that key again for VMs carrying this plugin's creation label, even without a local VM record. Your configured SSH agent remains available for these older VMs; unrelated VMs use their normal SSH configuration.
@@ -136,7 +183,7 @@ A local working-tree check of 0.7.6 on September 12, 2026, using marketplace ana
 
 ## Security boundary
 
-The upstream beta MCP has a general command executor. This plugin pins every upstream MCP subprocess to the dedicated `omarchy-nebius-mcp` browser-auth profile and never forwards user-authored command strings to it. The agent-facing bridge accepts only typed arguments and calls predefined operations. Creation requires a fresh ten-minute plan plus write-tool approval. Start/stop/connect validate personal-project access; deletion additionally requires plugin registration, an ownership label and explicit destructive confirmation.
+The upstream beta MCP has a general command executor. This plugin pins every upstream MCP subprocess to the dedicated `omarchy-nebius-mcp` browser-auth profile and never forwards user-authored command strings to it. The agent-facing bridge accepts only typed arguments and calls predefined operations. Creation requires a fresh ten-minute plan plus write-tool approval. Start/stop/connect validate personal-project access; deletion additionally requires successful cloud creation audit evidence identifying the current tenant user as the VM creator, a review of the exact boot disk, and explicit destructive confirmation. Plugin registration and labels are not required. If creation audit history is missing or inaccessible, use the Nebius console to resolve ownership. Secondary disks are retained; protected or attached boot disks are never blindly removed. Interrupted cleanup is bound to the confirming account and tenant.
 
 Tests use temporary state, synthetic CLI responses and isolated installer stages, with no cloud mutations. Validation on Omarchy includes the full regression suite, the real CLI parser inside a disabled network namespace, manifest validation and offscreen widget rendering. Development testing has exercised VM lifecycle operations and SSH on the owner's account; it is not a fresh end-to-end provisioning test of every release. A clean install, browser sign-in and a newly created VM's first SSH/forward/delete flow remain a user-confirmed release smoke test; do not infer that coverage from unit tests or example screenshots.
 

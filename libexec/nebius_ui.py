@@ -25,7 +25,10 @@ import unicodedata
 from typing import Any
 
 import nebius_core as core
+import nebius_catalog as catalog
 import nebius_jobs as jobs
+import nebius_inventory as inventory_view
+import nebius_timing as timing
 import nebius_ports as ports
 import nebius_ssh as ssh_client
 import nebius_shortcuts as shortcuts
@@ -256,7 +259,7 @@ class App:
         filtered = []
         while True:
             previous_id = None
-            if load_rows and not searching and time.monotonic() - refreshed_at >= 2:
+            if load_rows and time.monotonic() - refreshed_at >= 2:
                 if filtered and selected < len(filtered):
                     value = filtered[selected][2]
                     previous_id = value.get("id") if isinstance(value, dict) else value
@@ -298,11 +301,12 @@ class App:
                     context_keys.append(key_label(key) + " " + label)
             context_keys += ["/ search", "? help"]
             compact += "\n" + "   ".join(context_keys)
-            bottom = self.frame(title, subtitle, compact, allocation=self.allocation if allocation else None)
+            bottom = self.frame(title, subtitle() if callable(subtitle) else subtitle, compact, allocation=self.allocation if allocation else None)
+            screen_notes = notes() if callable(notes) else notes
             height, width = self.screen.getmaxyx()
             y = 7 if allocation else 6
-            note_lines = [line for note in notes for line in self.wrap(note, width - 8)]
-            note_slots = max(1 if notes else 0, min(3, bottom - y - 7))
+            note_lines = [line for note in screen_notes for line in self.wrap(note, width - 8)]
+            note_slots = max(1 if screen_notes else 0, min(3, bottom - y - 7))
             clipped_notes = len(note_lines) > note_slots
             for line in note_lines[:max(0, note_slots - (1 if clipped_notes else 0))]:
                 self.put(y, 4, line)
@@ -310,7 +314,7 @@ class App:
             if clipped_notes:
                 self.put(y, 4, "[F2] Read full summary", self.accent)
                 y += 1
-            if notes:
+            if screen_notes:
                 y += 1
             if query or searching:
                 self.put(y, 4, "Search: " + query + ("_" if searching else ""), self.accent)
@@ -394,7 +398,7 @@ class App:
                 text += "\n  [PgUp/PgDn] page\n  [Home/End] first / last\n  Search: [Ctrl+U] clear, [Enter] finish"
                 self.message("Menu help", text)
             elif key == curses.KEY_F2 and clipped_notes:
-                self.message(title + " / summary", "\n\n".join(notes))
+                self.message(title + " / summary", "\n\n".join(screen_notes))
             elif isinstance(key, str) and key in actions:
                 action = actions[key]
                 if callable(action) and not filtered:
@@ -544,28 +548,22 @@ class App:
         elapsed = int(time.time() - started)
         operation = core._read_json(getattr(self, "watched_operation", core.OPERATION_FILE), {}) if mutation else {}
         spinner = "|/-\\"[elapsed % 4]
-        bottom = self.frame(title, f"{spinner}  {elapsed // 60}:{elapsed % 60:02d} elapsed",
+        total = (timing.headline(operation) if operation.get("timeline") else "Waiting for operation progress") if mutation else f"{elapsed // 60}:{elapsed % 60:02d} elapsed"
+        bottom = self.frame(title, f"{spinner}  {total}",
                             "Esc/B background (work continues)" if mutation else "Esc cancel this read")
         y = 7
-        for line in self.wrap(operation.get("message") or title):
+        for line in self.wrap(operation.get("message") or title)[:2]:
             self.put(y, 3, line, self.accent | curses.A_BOLD)
             y += 1
         if mutation:
-            stages = {"checking": 0, "project": 1, "network": 2, "disk": 1, "instance": 2, "boot": 3, "done": 4}
-            current = stages.get(operation.get("stage"), 0)
-            labels = ["Check request", "Create boot disk", "Create VM", "Wait for address", "VM running"]
-            if operation.get("stage") in {"project", "network"}:
-                labels = ["Check request", "Create project", "Wait for network", "Project ready"]
-            if operation.get("stage") in {"start", "stop", "delete"}:
-                labels = ["Send request", "Wait for Nebius", "Update overview"]
-                current = 1
-            y += 2
-            for index, label in enumerate(labels):
-                if y >= bottom:
-                    break
-                self.put(y, 3, ("✓ " if index < current else "› " if index == current else "  ") + label,
-                         self.accent if index == current else 0)
-                y += 2
+            y = min(y + 1, 9)
+            stage_lines = timing.lines(operation)
+            slots = max(1, bottom - y + 1)
+            if len(stage_lines) > slots:
+                stage_lines = ["Earlier stages saved in Activity"] + stage_lines[-max(1, slots - 1):]
+            for line in stage_lines[:slots]:
+                self.put(y, 3, line)
+                y += 1
         self.screen.refresh()
 
     def read(self, title, *arguments):
@@ -598,7 +596,10 @@ class App:
             if job.get("phase") in {"ready", "error"}:
                 if job["phase"] == "error":
                     operation = core._read_json(self.watched_operation, {}) if job.get("started_at") else {}
-                    self.message("Operation stopped", operation.get("message", job.get("error", "")) + "\n\n" + operation.get("recovery", ""),
+                    if job.get("command") in {"create", "start"} and operation.get("vm_id"):
+                        self.operation_result({**job, "operation": operation})
+                        raise Background()
+                    self.message("Operation stopped", operation.get("message", job.get("error", "")) + "\n\n" + timing.text(operation) + "\n\n" + operation.get("recovery", ""),
                                  details=job.get("error", ""), error=True)
                     raise Back()
                 return job.get("result", {})
@@ -639,7 +640,7 @@ class App:
         while True:
             groups: dict[str, list[dict[str, Any]]] = {}
             for row in self.capacity.get("offerings", []):
-                groups.setdefault(row["gpu_label"], []).append(row)
+                groups.setdefault(catalog.gpu_name(row.get("platform", ""), row["gpu_label"]), []).append(row)
             rows = []
             for label, offerings in sorted(groups.items()):
                 best = max(offerings, key=lambda item: core._availability_score(item[self.allocation]))
@@ -664,7 +665,8 @@ class App:
 
     def configuration(self, gpu_label):
         while True:
-            offerings = [row for row in self.capacity.get("offerings", []) if row["gpu_label"] == gpu_label]
+            offerings = catalog.configurations([row for row in self.capacity.get("offerings", [])
+                        if catalog.gpu_name(row.get("platform", ""), row["gpu_label"]) == gpu_label], self.allocation)
             offerings.sort(key=lambda row: (int(row.get("gpu_count") or 0), -core._availability_score(row[self.allocation])[0], row["region"]))
             rows = [(f"{row['gpu_count']}× {gpu_label} · {row['region']}",
                      f"{row['vcpu_count']} vCPU · {row['memory_gib']} GiB RAM\n"
@@ -712,14 +714,41 @@ class App:
                 result = self.mutate("Creating project", "create-project", "--region", offering["region"], "--name", name, "--confirmed")
                 self.notice = f"Project {result['project_name']} created."
                 self.load_capacity(True)
-                refreshed = next((item for item in self.capacity["offerings"] if item["offering_id"] == offering["offering_id"]), None)
+                refreshed = next((item for item in catalog.configurations(self.capacity["offerings"], self.allocation)
+                                  if catalog.configuration_key(item) == catalog.configuration_key(offering)), None)
                 if not refreshed or result["project_id"] not in {p["project_id"] for p in refreshed["projects"]}:
                     raise core.NebiusError("The project exists, but GPU placement is not ready yet. Refresh capacity in a moment.")
+                offering.update(refreshed)
                 return result["project_id"]
             except Back:
                 continue
             except core.NebiusError as error:
                 self.show_error(error)
+
+    def choose_image(self, offering, project_id):
+        arguments = ["images", "--project-id", project_id]
+        for variant in offering.get("variants", [offering]):
+            arguments += ["--offering-id", variant["offering_id"]]
+        while True:
+            result = self.read("Finding available images", *arguments)
+            rows = [("Default Ubuntu / CUDA", core.IMAGE_FAMILY, None, "Default")]
+            for image in result["images"]:
+                detail = (f"{image['cpu_architecture']} · minimum {image['min_disk_gib']} GiB disk\n"
+                          f"{image['image_id']}")
+                if image.get("summary"):
+                    detail = image["summary"] + "\n" + detail
+                if image.get("description"):
+                    detail += "\n" + image["description"]
+                if image["warnings"]:
+                    detail += "\n" + "; ".join(image["warnings"])
+                rows.append((image["name"], detail, image, image["source"]))
+            chosen = self.menu("Boot image", rows, subtitle=offering["region"],
+                               notes=["Public and accessible project images. Known architecture and hardware mismatches are excluded.",
+                                      "Custom images must support cloud-init to install your SSH key."] + result["warnings"],
+                               actions={"r": "__refresh"},
+                               footer="↑↓ / j k move   Enter select   R refresh   / search   Esc back")
+            if chosen != "__refresh":
+                return chosen
 
     def launch_flow(self, offering):
         # A new project needs a new disk. Existing projects may already have a
@@ -735,11 +764,15 @@ class App:
         project_id = self.choose_project(offering)
         suggested = offering["platform"].removeprefix("gpu-").split("-")[0] + "-" + dt.datetime.now().strftime("%m%d-%H%M")
         name = suggested
+        image = None
+        disk_gib = core.DEFAULT_DISK_GIB
         plan = None
         created_vm = None
         while True:
             action = self.menu("VM settings", [
                 ("Name", name, "name", "Configuration"),
+                ("Boot image", image["name"] if image else "Default Ubuntu / CUDA", "image", "Configuration"),
+                ("Boot disk", f"{disk_gib} GiB Network SSD", "disk", "Configuration"),
                 ("Allocation", allocation_label(self.allocation) + " · [P] switch", "allocation", "Configuration"),
                 ("Project", next((p["project_name"] for p in self.capacity["projects"] if p["project_id"] == project_id), project_id), "project", "Configuration"),
                 ("Review and create", "Run preflight checks and review cost before confirming", "review", "Next step"),
@@ -751,18 +784,41 @@ class App:
                     name = self.edit("VM name", name, validate=core._safe_name)
                 except Back:
                     pass
+            elif action == "image":
+                try:
+                    image = self.choose_image(offering, project_id)
+                    disk_gib = max(disk_gib, image["min_disk_gib"]) if image else disk_gib
+                except Back:
+                    pass
+                except core.NebiusError as error:
+                    self.show_error(error)
+            elif action == "disk":
+                def validate_size(value):
+                    minimum = max(50, image["min_disk_gib"] if image else 50)
+                    if not value.isdigit() or not minimum <= int(value) <= 30720:
+                        raise core.NebiusError(f"Choose a disk size between {minimum} and 30720 GiB")
+                    return value
+                try:
+                    disk_gib = int(self.edit("Boot disk (GiB)", str(disk_gib), validate=validate_size,
+                                            notes=["Storage remains billable while the VM is stopped."]))
+                except Back:
+                    pass
             elif action == "allocation":
                 self.toggle_allocation()
             elif action == "project":
-                projects = next((item["projects"] for item in self.capacity["offerings"] if item["offering_id"] == offering["offering_id"]), [])
+                projects = offering.get("projects", [])
                 try:
                     project_id = self.menu("Place VM in", [(p["project_name"], p["region"], p["project_id"]) for p in projects])
+                    image = None
                 except Back:
                     pass
             else:
                 try:
-                    plan = self.read("Running preflight checks", "plan", "--offering-id", offering["offering_id"],
-                                     "--project-id", project_id, "--name", name, "--allocation", self.allocation)
+                    selected = catalog.resolve_variant(offering, project_id, self.allocation,
+                                                       image["compatible_offering_ids"] if image else None)
+                    plan = self.read("Running preflight checks", "plan", "--offering-id", selected["offering_id"],
+                                     "--project-id", project_id, "--name", name, "--allocation", self.allocation,
+                                     "--image-id", image["image_id"] if image else "", "--disk-gib", str(disk_gib))
                     check = plan["preflight"]
                     if not check["ready"]:
                         self.message("Preflight blocked creation", check["message"] + "\n\n" + check["recovery"] +
@@ -776,6 +832,8 @@ class App:
                         f"  Estimate:   {price}",
                         "No automatic stop is scheduled. Stop the VM manually when finished. Disks remain billable until deleted.",
                     ]
+                    source = plan.get("boot_image", {"label": core.IMAGE_FAMILY, "note": ""})
+                    notes.insert(1, f"Boot image\n  {source['label']}\n  {plan.get('image_id') or plan.get('image_family', '')}\n  {source['note']}")
                     notes.append("Network: static public IP; inbound SSH (TCP 22) only. Use Ports for local application access.")
                     if plan.get("reusable_disk"):
                         notes.insert(1, f"Boot disk\n  Reuse boot disk: {plan['reusable_disk']['name']}\n  No new disk will be created.")
@@ -790,13 +848,8 @@ class App:
                         continue
                     vm = self.mutate("Creating VM", "create", "--plan-id", plan["plan_id"])
                     created_vm = vm
-                    self.notice = f"{vm['name']} is running."
-                    result_notes = [f"Address: {vm.get('public_ip', '')}"]
-                    choice = self.menu("VM is running", [("Connect now", vm.get("public_ip", ""), "connect"),
-                                                         ("Back to overview", "Your VM is saved", "overview")],
-                                       subtitle=vm["name"], notes=result_notes)
-                    if choice == "connect":
-                        self.ssh({**vm, "managed": True, "ssh_user": core.SSH_USER})
+                    self.notice = f"{vm['name']} is ready for SSH. " + timing.headline(vm.get("launch_timing", {}))
+                    self.operation_result({"phase": "ready", "result": vm, "operation": vm.get("launch_timing", {})})
                     self.inventory = {}
                     raise Background()
                 except Back:
@@ -810,7 +863,54 @@ class App:
                         self.inventory = {}
                         raise Background()
 
+    def operation_result(self, job):
+        """A saved launch report stays open across SSH attempts and session exits."""
+        operation = job.get("operation") or {}
+        vm = dict(job.get("result") or {})
+        vm.setdefault("id", operation.get("vm_id"))
+        vm.setdefault("name", operation.get("name") or vm.get("id") or "VM")
+        vm.setdefault("ssh_user", operation.get("ssh_user"))
+        title = ("SSH ready" if operation.get("ssh_ready") else "Launch report") + " · " + vm["name"]
+        lines = timing.lines(operation) + ["", operation.get("message") or jobs.describe(job)["message"]]
+        if operation.get("recovery"):
+            lines += ["", operation["recovery"]]
+        lines += ["", "Saved: Activity or VM actions → Launch timings."]
+        offset = 0
+        while True:
+            footer = ("C SSH   " if vm.get("id") else "") + "↑↓ scroll   D details   Esc back"
+            bottom = self.frame(title, timing.headline(operation), footer)
+            content = self.wrap("\n".join(lines))
+            slots = max(1, bottom - 5)
+            offset = min(offset, max(0, len(content) - slots))
+            for y, line in enumerate(content[offset:offset + slots], 6):
+                self.put(y, 2, line)
+            self.screen.refresh()
+            key = self.key()
+            if key in ("\x1b", 27, "v", "V"):
+                return
+            if key in ("c", "C") and vm.get("id"):
+                try:
+                    self.ssh(vm)
+                except Back:
+                    pass
+            elif key in ("d", "D"):
+                self.message("Launch details", json.dumps(job, indent=2))
+            elif key in ("j", curses.KEY_DOWN):
+                offset += 1
+            elif key in ("k", curses.KEY_UP):
+                offset = max(0, offset - 1)
+            elif key in (curses.KEY_NPAGE, "\n", "\r"):
+                offset += slots
+            elif key == curses.KEY_PPAGE:
+                offset = max(0, offset - slots)
+
     def ssh(self, vm):
+        launch = jobs.latest_vm_job(vm["id"])
+        if launch and launch.get("phase") in {"queued", "running"}:
+            self.watch(launch["id"], "Waiting for SSH readiness · " + vm["name"])
+            self.operation_result(jobs.latest_vm_job(vm["id"]) or launch)
+            return
+        launch_operation = (launch or {}).get("operation") or vm.get("launch_timing") or {}
         username = vm.get("ssh_user") or "ubuntu"
         if not vm.get("ssh_user"):
             username = self.edit("SSH username", username,
@@ -825,7 +925,8 @@ class App:
                         if y < bottom:
                             self.put(y, 3, line)
                     self.screen.refresh()
-                ssh_client.wait_ready(connection, progress=progress, cancelled=lambda: self.key() in ("\x1b", 27))
+                if ssh_client.wait_ready(connection, progress=progress, cancelled=lambda: self.key() in ("\x1b", 27)) is not True:
+                    raise ssh_client.SSHError("SSH login has not been verified; no session was opened")
                 curses.def_prog_mode()
                 curses.endwin()
                 started = time.monotonic()
@@ -847,14 +948,21 @@ class App:
                 raise Back()
             except (ssh_client.SSHError, core.NebiusError, OSError) as error:
                 issue = str(error)
-            core._atomic_json(core.STATE_DIR / "ssh-last-error.json", {"vm_id": vm["id"], "name": vm["name"], "error": issue})
-            choice = self.menu("SSH did not connect", [("Retry connection", "Check login readiness and try again", "resume"),
-                                ("SSH username", username, "settings"), ("Back to VMs", "The VM is unchanged", "overview")],
-                               subtitle=vm["name"], notes=[issue])
-            if choice == "overview":
-                return
-            if choice == "settings":
-                username = self.edit("SSH username", username)
+            core._atomic_json(core.STATE_DIR / "ssh-last-error.json", {"vm_id": vm["id"], "name": vm["name"], "error": issue,
+                                                                             "launch_timing": launch_operation})
+            while True:
+                choice = self.menu("SSH did not connect", [("Retry connection", "Check login readiness and try again", "resume"),
+                                    ("SSH username", username, "settings"), ("Launch timings", timing.headline(launch_operation), "timings"),
+                                    ("Back to VMs", "The VM is unchanged", "overview")],
+                                   subtitle=vm["name"], notes=[issue, timing.headline(launch_operation)])
+                if choice == "overview":
+                    return
+                if choice == "timings":
+                    self.message("Launch timings", timing.text(launch_operation))
+                    continue
+                if choice == "settings":
+                    username = self.edit("SSH username", username)
+                break
 
     def activity(self):
         def rows():
@@ -874,9 +982,15 @@ class App:
                 continue
             if selected["phase"] in {"running", "queued"}:
                 self.watch(selected["id"], jobs.describe(selected)["title"])
+                completed = next((job for job in jobs.jobs() if job["id"] == selected["id"]), selected)
+                if completed.get("command") in {"create", "start"}:
+                    self.operation_result(completed)
             else:
                 operation = selected.get("operation", {})
                 view = jobs.describe(selected)
+                if selected.get("command") in {"create", "start"} and not jobs.can_resume(selected):
+                    self.operation_result(selected)
+                    continue
                 if jobs.can_resume(selected):
                     try:
                         action = self.menu(view["title"], [("Details", view["message"], "details"),
@@ -886,7 +1000,7 @@ class App:
                     if action == "resume":
                         jobs.submit(selected["arguments"], view["title"])
                         continue
-                text = view["status"] + "\n" + view["message"]
+                text = view["status"] + "\n" + view["message"] + "\n\n" + timing.text(operation)
                 if operation.get("recovery"):
                     text += "\n\n" + operation["recovery"]
                 if selected.get("finished_at"):
@@ -1040,15 +1154,18 @@ class App:
                     ports.change(choice["id"], action)
 
     def vm_actions(self, vm, action=None):
+        if vm.get("operation_job_id") and action in {"start", "stop", "delete", "operation"}:
+            self.watch(vm["operation_job_id"], "Operation progress · " + vm["name"])
+            return
         if vm.get("recovery_id"):
             request = next((item for item in self.inventory.get("recovery", []) if item["plan_id"] == vm["recovery_id"]), None)
             if not request:
                 raise core.NebiusError("This saved recovery state changed. Refresh Your VMs")
             self.recovery_actions(request)
             return
-        rows = []
+        rows = [("Operation progress", "Follow the operation already in progress", "operation")] if vm.get("operation_job_id") else []
         if vm["state"] == "running":
-            rows += [("Connect over SSH", "Enter your running VM", "connect"), ("Stop VM", "Compute stops; disks remain billable", "stop")]
+            rows += [("Check SSH and connect", "Open a session only after login succeeds", "connect"), ("Stop VM", "Compute stops; disks remain billable", "stop")]
         elif vm["state"] == "stopped":
             rows += [("Start VM", "Resume billing and wait for its address", "start")]
         if not vm.get("instance_deleted"):
@@ -1057,8 +1174,9 @@ class App:
         rows = [(*row, "VM actions") for row in rows]
         if not vm.get("instance_deleted"):
             rows += [("Disks and storage", "Inspect attached disks and cleanup options", "storage", "Inspect")]
+        rows += [("Launch timings", "Saved stages and total time to SSH ready", "timings", "Inspect")]
         rows += [("Full details", "Resource identifiers and state", "details", "Inspect")]
-        if vm.get("can_delete"):
+        if vm.get("can_delete") and not vm.get("operation_job_id"):
             rows += [("Delete remaining boot disk" if vm.get("instance_deleted") else "Delete VM and boot disk",
                       "Permanent deletion; disk charges continue until removed", "delete", "Delete")]
         if action is None:
@@ -1067,10 +1185,18 @@ class App:
         elif action not in {row[2] for row in rows}:
             self.message("Action unavailable", "This action is not available for " + vm["name"] + " in its current state.")
             return
-        if action == "connect":
+        if action == "operation":
+            self.watch(vm["operation_job_id"], "Operation progress · " + vm["name"])
+        elif action == "connect":
             self.ssh(vm)
         elif action == "ports":
             self.ports(vm)
+        elif action == "timings":
+            launch = jobs.latest_vm_job(vm["id"])
+            if launch and launch.get("phase") in {"running", "queued"}:
+                self.watch(launch["id"], "Launch progress · " + vm["name"])
+                launch = jobs.latest_vm_job(vm["id"])
+            self.operation_result(launch or {"operation": vm.get("launch_timing", {}), "result": vm})
         elif action == "details":
             self.message("VM details", json.dumps(vm, indent=2))
         elif action == "storage":
@@ -1097,7 +1223,8 @@ class App:
             if self.confirm_launch(notes, json.dumps(vm, indent=2), title=label,
                                    action="delete permanently" if action == "delete" else label.lower(),
                                    confirm_key={"delete": "d", "start": "t", "stop": "s"}[action]):
-                self.mutate(label + " · " + vm["name"], action, "--vm-id", vm["id"], *(["--confirmed"] if action == "delete" else []))
+                self.mutate(label + " · " + vm["name"], action, "--vm-id", vm["id"],
+                            *(["--confirmed", "--expected-disk-id", str(vm.get("disk_id") or "")] if action == "delete" else []))
 
     def recovery_actions(self, request):
         choice = self.menu("Interrupted launch", [
@@ -1146,34 +1273,48 @@ class App:
                 self.mutate("Deleting unused boot disk", "delete-disk", "--disk-id", disk["disk_id"], "--confirmed")
 
     def overview(self, jump=False):
-        refresh = not self.inventory
+        with inventory_view.Poller() as poller:
+            return self._overview(jump, poller)
+
+    def _overview(self, jump, poller):
+        if not self.inventory:
+            self.inventory = self.read("Discovering your VMs", "list", "--refresh")
+        refresh = False
         selected_id, selected_index = None, 0
-        while True:
-            if refresh:
-                self.inventory = self.read("Discovering your VMs", "list", "--refresh")
-                refresh = False
-            vms = [vm for vm in self.inventory.get("vms", []) if not jump or vm["state"] == "running"]
+        rows, vms, notes = [], [], []
+        def live_rows():
+            nonlocal rows, vms, notes, refresh
+            entries = jobs.jobs()
+            self.inventory = poller.poll(self.inventory, entries, force=refresh)
+            refresh = False
+            displayed = inventory_view.apply_jobs(self.inventory, entries)
+            vms = [vm for vm in displayed.get("vms", []) if not jump or vm["state"] == "running" or vm.get("operation_job_id")]
             rows = [(f"{vm['name']} · {vm['state'].upper()}" + (" · saved state" if vm.get("stale") else ""),
-                     f"{vm['platform'].removeprefix('gpu-').upper()} · {vm['region']} · {allocation_label(vm['allocation'])}\n"
-                     f"Project: {vm['project_name']}", vm, "Virtual machines") for vm in vms]
+                     f"{catalog.gpu_name(vm['platform'])} · {vm['region']} · {allocation_label(vm['allocation'])}\n"
+                     f"Project: {vm['project_name']}" + ("\n" + vm["operation_note"] if vm.get("operation_note") else ""), vm, "Virtual machines") for vm in vms]
             if not jump:
                 rows += [(item["name"] + " · LAUNCH UNCONFIRMED", item["project"]["region"] + " · check this request; not a VM health status", {"recovery": item}, "Launch requests")
-                         for item in self.inventory.get("recovery", [])]
+                         for item in displayed.get("recovery", [])]
                 rows += [(item["name"] + " · BOOT DISK AVAILABLE", "No VM created · " + item["project"]["project_name"] + " · ready to reuse",
-                          {"reusable_disk": item}, "Saved boot disks") for item in self.inventory.get("reusable_disks", [])]
+                          {"reusable_disk": item}, "Saved boot disks") for item in displayed.get("reusable_disks", [])]
             if not rows:
                 rows = [("Get a GPU VM", "No running VMs in your projects" if jump else "No VMs found in your projects", "__get")]
             notes = [self.notice] if self.notice else []
-            if self.active_job():
+            if any(job.get("phase") in {"queued", "running"} for job in entries):
                 notes += ["Operation in progress · A to follow it"]
             if self.inventory.get("errors"):
-                notes += ["Some projects could not be read. R retries; D shows details."]
+                notes += ["Some projects could not be read. R retries; I shows details."]
+            if poller.error:
+                notes += ["Refresh failed; showing saved VMs. Retrying automatically. " + poller.error]
+            return rows
+        while True:
+            live_rows()
             try:
                 selected_index = next((index for index, row in enumerate(rows) if isinstance(row[2], dict)
                                        and row[2].get("id") == selected_id), min(selected_index, len(rows) - 1)) if selected_id else selected_index
-                choice = self.menu("Jump into a VM" if jump else "Your VMs", rows,
-                    subtitle=f"{len(vms)} {'running ' if jump else ''}VMs · {self.snapshot_note(self.inventory)}",
-                    notes=notes, selected=selected_index,
+                choice = self.menu("Jump into a VM" if jump else "Your VMs", live_rows,
+                    subtitle=lambda: f"{len(vms)} VMs · Auto-refresh" + (" · refreshing…" if poller.process else ""),
+                    notes=lambda: notes, selected=selected_index,
                     actions={"p": lambda vm: {"vm_action": "ports", "vm": vm},
                              "d": lambda vm: {"vm_action": "delete", "vm": vm},
                              "s": lambda vm: {"vm_action": "stop", "vm": vm},
@@ -1239,7 +1380,10 @@ class App:
                     refresh = True
                 elif jump:
                     try:
-                        if choice.get("recovery_id"):
+                        if choice.get("operation_job_id"):
+                            self.vm_actions(choice, action="operation")
+                            refresh = True
+                        elif choice.get("recovery_id"):
                             self.vm_actions(choice)
                             refresh = True
                         else:

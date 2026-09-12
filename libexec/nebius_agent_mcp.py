@@ -8,6 +8,7 @@ import sys
 import nebius_jobs as jobs
 import nebius_ports as ports
 import nebius_uninstall as removal
+from nebius_catalog import list_images
 from typing import Any, Callable
 
 from nebius_core import (
@@ -36,7 +37,9 @@ SERVER_INFO = {"name": "omarchy-nebius", "version": VERSION}
 INSTRUCTIONS = (
     "Manage Nebius GPU VMs. Start with view_gpu_capacity without refresh so choices appear immediately; "
     "state the snapshot age, and request a live refresh only when the user asks. Let the user choose a GPU type. "
-    "Only personal projects are returned; shared tenant projects are intentionally hidden. If the chosen region has no "
+    "Group equivalent GPU variants under their gpu_label, preserving machine sizes and exact offering IDs. "
+    "Use list_images to offer available custom or public images after project selection. "
+    "Only personal VM destination projects are returned; shared tenant projects are intentionally hidden. If the chosen region has no "
     "personal project, offer to create one and explain that it remains even if VM creation is canceled. Treat project "
     "as a secondary placement choice. Let the user edit a proposed name and choose on-demand or preemptible allocation. "
     "Run check_vm_quota before creating a project. A plan with preflight.ready=false cannot be created. "
@@ -112,11 +115,16 @@ TOOLS = [
         [],
         read_only=True,
     ),
+    tool("list_images", "List available public and custom images for chosen machine configurations and a project.",
+         {"offering_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+          "project_id": {"type": "string"}}, ["offering_ids", "project_id"], read_only=True),
     tool(
         "plan_gpu_vm",
         "Prepare a GPU VM plan with preflight checks, chosen allocation and editable name. No automatic stop is scheduled. Does not create cloud resources.",
         {
             "name": {"type": "string", "description": "Optional DNS-safe VM name."},
+            "image_id": {"type": "string", "description": "Exact image ID from list_images; omit for the default Ubuntu/CUDA family."},
+            "disk_gib": {"type": "integer", "minimum": 50, "maximum": 30720},
             "offering_id": {"type": "string", "description": "GPU option returned by view_gpu_capacity."},
             "project_id": {"type": "string", "description": "Optional compatible project returned with the GPU option."},
             "allocation": {"type": "string", "enum": ["on_demand", "preemptible"], "default": "on_demand"},
@@ -157,10 +165,11 @@ TOOLS = [
     ),
     tool(
         "delete_vm",
-        "Permanently delete a plugin-created VM and its boot disk after a plain-language confirmation and destructive tool approval.",
+        "Permanently delete your VM and its reviewed boot disk after explicit confirmation. Cloud audit evidence must identify you as its creator; plugin registration is not required. Secondary disks are kept.",
         {
             "vm_id": {"type": "string"},
             "confirmed": {"type": "boolean", "description": "True only after the user plainly confirmed deletion."},
+            "expected_disk_id": {"type": "string", "description": "Exact boot disk ID reviewed with the user, from list_vms or vm_storage; empty if there is no boot disk."},
         },
         ["vm_id", "confirmed"],
         read_only=False,
@@ -209,19 +218,21 @@ def _call(name: str, arguments: dict[str, Any]) -> Any:
         "uninstall_plugin": lambda: removal.uninstall(confirmed=arguments.get("confirmed"),
             keep_cli=arguments.get("keep_cli"), keep_ssh_key=arguments.get("keep_ssh_key"), keep_uv=arguments.get("keep_uv")),
         "view_gpu_capacity": lambda: gpu_capacity(force_refresh=arguments.get("refresh") is True),
+        "list_images": lambda: list_images(arguments["offering_ids"], arguments["project_id"]),
         "list_vms": lambda: list_vms(force_refresh=arguments.get("refresh") is True),
         "recover_launch": lambda: recover_launch(str(arguments.get("request_id", ""))),
         "repair_rejected_launches": lambda: repair_rejected_launches(),
         "plan_gpu_vm": lambda: plan_gpu_vm(
             arguments.get("name"), arguments.get("offering_id"), arguments.get("project_id"),
-            arguments.get("allocation", "on_demand"), arguments.get("auto_stop_hours", 0)
+            arguments.get("allocation", "on_demand"), arguments.get("auto_stop_hours", 0),
+            arguments.get("image_id", ""), arguments.get("disk_gib")
         ),
         "create_project": lambda: jobs.submit(["create-project", "--region", str(arguments.get("region", "")),
                                                "--name", str(arguments.get("name", "")), "--confirmed"]),
         "create_gpu_vm": lambda: jobs.submit(["create", "--plan-id", str(arguments.get("plan_id", ""))]),
         "start_vm": lambda: jobs.submit(["start", "--vm-id", str(arguments.get("vm_id", ""))]),
         "stop_vm": lambda: jobs.submit(["stop", "--vm-id", str(arguments.get("vm_id", ""))]),
-        "delete_vm": lambda: submit_delete("delete", "--vm-id", arguments.get("vm_id"), arguments.get("confirmed")),
+        "delete_vm": lambda: submit_delete("delete", "--vm-id", arguments.get("vm_id"), arguments.get("confirmed"), arguments.get("expected_disk_id")),
         "delete_saved_disk": lambda: submit_delete("delete-disk", "--disk-id", arguments.get("disk_id"), arguments.get("confirmed")),
         "list_operations": lambda: {"jobs": jobs.jobs()},
         "list_ports": lambda: {"ports": ports.listing()},
@@ -241,10 +252,13 @@ def _call(name: str, arguments: dict[str, Any]) -> Any:
         return handlers[name]()
 
 
-def submit_delete(command, flag, resource_id, confirmed):
+def submit_delete(command, flag, resource_id, confirmed, expected_disk_id=None):
     if confirmed is not True:
         raise NebiusError("Deletion requires an explicit confirmation")
-    return jobs.submit([command, flag, str(resource_id or ""), "--confirmed"])
+    arguments = [command, flag, str(resource_id or ""), "--confirmed"]
+    if expected_disk_id is not None:
+        arguments += ["--expected-disk-id", str(expected_disk_id)]
+    return jobs.submit(arguments)
 
 
 def _write(value: dict[str, Any]) -> None:

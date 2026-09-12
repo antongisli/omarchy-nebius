@@ -1,10 +1,36 @@
 # Release notes
 
+## Unreleased · Image picker and GPU grouping
+
+- The timing stage is named SSH ready. Initial probes retry after 0.5 seconds
+  with a 2-second connection timeout, returning to patient retries after 30 seconds.
+  Saved details include connection preparation and individual probe attempts.
+
+- VM lists update operation states immediately and refresh cloud inventory in the
+  background. Completed deletions disappear without pressing refresh; navigation
+  and search remain in place, and failed reads retain the last known inventory.
+
+- Launch/start now wait for verified SSH login. Stage durations and total time to
+  SSH ready remain on a saved result screen, including after connection attempts.
+  Activity and VM actions reopen the report; failed probes never open a session.
+
+- Deletion verifies your Nebius identity against VM creation audit history instead
+  of requiring a local plugin record. Existing VMs remain deletable after reinstall;
+  confirmation identifies the exact boot disk and secondary disks are kept.
+
+- VM settings can select existing public and accessible custom images for the
+  chosen region and machine, with compatibility details and editable disk size.
+- Image access, region, hardware restrictions, readiness and disk fit are checked
+  before allocation. Agents can list images and plan with an exact image ID.
+- RTX PRO 6000 and L40S platform variants share product names and equivalent
+  configurations; placement retains the exact underlying platform and preset.
+
 ## 0.7.10 · 2026-09-12 · Lifecycle response handling
 
 - Start, stop and deletion now accept the CLI's plain-text asynchronous operation ID, as well as JSON-encoded IDs. Resource and operation-status responses still require JSON.
 - Operation IDs are validated and saved before polling. Invalid replies retain the submission journal, so retrying cannot silently submit the same action twice.
 - Added stdout-level regressions for instance and disk operations, failed polling, invalid responses and read-only reconciliation of an uncertain request.
+
 
 ## 0.7.9 · 2026-09-12 · SSH after reinstall
 
