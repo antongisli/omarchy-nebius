@@ -141,4 +141,4 @@ Found a rough edge? [Open an issue](https://github.com/antongisli/omarchy-nebius
 
 [Release notes](CHANGELOG.md) · [Full reference](docs/reference.md) · [Contributing](docs/development.md) · [Roadmap](docs/roadmap.md)
 
-Maintained by [Anton Smith](https://github.com/antongisli). Official Nebius CLI + MCP; no `other-tool` dependency. [MIT code](LICENSE) · [Brand credits](assets/NOTICE.md)
+Maintained by [Anton Smith](https://github.com/antongisli). Official Nebius CLI + MCP. [MIT code](LICENSE) · [Brand credits](assets/NOTICE.md)
