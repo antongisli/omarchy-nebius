@@ -1,5 +1,11 @@
 # Release notes
 
+## 0.7.10 · 2026-09-12 · Lifecycle response handling
+
+- Start, stop and deletion now accept the CLI's plain-text asynchronous operation ID, as well as JSON-encoded IDs. Resource and operation-status responses still require JSON.
+- Operation IDs are validated and saved before polling. Invalid replies retain the submission journal, so retrying cannot silently submit the same action twice.
+- Added stdout-level regressions for instance and disk operations, failed polling, invalid responses and read-only reconciliation of an uncertain request.
+
 ## 0.7.9 · 2026-09-12 · SSH after reinstall
 
 - SSH and port forwarding offer the retained Nebius key for VMs labelled as created by this plugin, even after uninstall has removed the local VM registry.
