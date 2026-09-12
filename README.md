@@ -33,6 +33,39 @@ Out of VRAM in **ComfyUI**? Trying a bigger model with **vLLM** or **Open WebUI*
 
 You get a **CUDA-ready Ubuntu VM**; you install the apps and models. Choose your GPU first, then a personal project—or create one with an editable suggested name.
 
+### ⚡ Use the validated fast H100 image
+
+The normal plugin uses Nebius's public Ubuntu 24.04 / CUDA 13 family. If your
+Nebius account can read Anton's validated v4b image, opt into it once:
+
+```bash
+~/.config/omarchy/plugins/nebius/bin/nebius-image fast-h100
+```
+
+Then choose a **single H100 in `eu-north1`**. The launch review must show
+`image-boost-dev-h100-v4b-20260912` and a **256 GiB SSD**. Other GPUs and regions
+continue to use the public image and 200 GiB default. Preflight blocks before
+allocating a disk if the exact image is inaccessible. Return entirely to the
+public family with `nebius-image public`.
+
+If you import a released image into your own project, configure the resulting
+ID directly:
+
+```bash
+~/.config/omarchy/plugins/nebius/bin/nebius-image set \
+  computeimage-YOUR_ID eu-north1 gpu-h100-sxm 256
+```
+
+`nebius-image status` shows the current local selection. The plugin checks the
+configured image live during preflight and uses it only for the matching region
+and platform.
+
+The optimized image recorded **10.759 seconds kernel-to-systemd startup** in one
+fresh H100 launch. It does not remove VM allocation or first-use disk preparation,
+which can dominate total launch time. The image currently belongs to the
+`antons-party` project; repository access does not grant image access. See the
+[image repository and access options](https://gitlab.nebius.dev/anton-smith/nebius-image-boost).
+
 <a id="install"></a>
 
 ## 🚀 Install

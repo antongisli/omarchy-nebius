@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly PLUGIN_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+
+case "${1:-}" in
+fast-h100)
+  exec python3 "$PLUGIN_ROOT/libexec/nebius_core.py" boot-image --fast-h100
+  ;;
+public)
+  exec python3 "$PLUGIN_ROOT/libexec/nebius_core.py" boot-image --clear
+  ;;
+status)
+  exec python3 "$PLUGIN_ROOT/libexec/nebius_core.py" boot-image --show
+  ;;
+set)
+  if (( $# != 5 )); then
+    printf 'Usage: nebius-image set IMAGE_ID REGION PLATFORM DISK_GIB\n' >&2
+    exit 2
+  fi
+  exec python3 "$PLUGIN_ROOT/libexec/nebius_core.py" boot-image \
+    --image-id "$2" --region "$3" --platform "$4" --disk-gib "$5"
+  ;;
+*)
+  printf 'Usage: nebius-image fast-h100|public|status\n       nebius-image set IMAGE_ID REGION PLATFORM DISK_GIB\n' >&2
+  exit 2
+  ;;
+esac

@@ -23,6 +23,35 @@ Omarchy supplies the ordinary terminal tools used by setup: Python, Bash, jq, cu
 
 ## Default VM workflow
 
+### Boot image selection
+
+By default, the plugin creates a 200 GiB Network SSD from the public
+`ubuntu24.04-cuda13.0` family. `bin/nebius-image fast-h100` stores a local,
+user-owned preference under the plugin state directory. For a single
+`gpu-h100-sxm` VM in `eu-north1`, plans then use exact image
+`computeimage-e00j76cr427pm08vg8` and a 256 GiB Network SSD. The plan and final
+review name the selected source. The exact image is never used for another
+platform or region.
+
+Every plan and confirmed creation performs a live `compute image get` preflight.
+If the signed-in identity cannot read the exact image, preflight blocks before
+disk allocation. The plugin does not silently claim the optimization or fall
+back after a user opted in. Run `bin/nebius-image public` to remove the preference
+and return to the public family. The preference changes local state only; it
+does not grant IAM access, copy an image, create a disk, or create a VM.
+
+For a copy imported into another project, use
+`bin/nebius-image set IMAGE_ID REGION PLATFORM DISK_GIB`. This stores the exact
+ID returned by that import. `bin/nebius-image status` prints the active choice.
+The custom selection gets the same scope and live-access checks as the built-in
+preset, but the plugin makes no performance or compatibility claim for it.
+
+The v4b image was validated only for the scope stated in its
+[internal repository](https://gitlab.nebius.dev/anton-smith/nebius-image-boost):
+headless single H100, Ubuntu 24.04/CUDA 13, and 256 GiB Network SSD for the
+recorded performance. Its GitLab visibility is independent of Nebius Compute
+resource visibility.
+
 - Reads regional Capacity Advisor data for the configured tenant while keeping shared project names out of the normal workflow.
 - Opens from the last successful capacity snapshot immediately; `R` requests a live refresh and falls back visibly if Nebius times out.
 - Lets the user choose the GPU type and region first, then uses only projects created by that user (plus the preferred profile project and plugin-created projects).

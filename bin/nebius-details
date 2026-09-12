@@ -24,6 +24,7 @@ printf 'Shape           1 GPU, selected from current capacity\n'
 printf 'Allocation      on-demand; press P to choose preemptible\n'
 printf 'Runtime         until you stop the VM manually\n'
 printf 'Deletion        explicit confirmation only; never automatic\n'
+printf 'Boot image      public family by default; nebius-image fast-h100 is opt-in\n'
 
 if [[ -s $STATE_DIR/setup.log ]]; then
   printf '\n  Recent setup events\n\n'

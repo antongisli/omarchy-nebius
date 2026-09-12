@@ -35,6 +35,7 @@ class ComputeTests(unittest.TestCase):
             "OPERATION_FILE": state / "operation.json", "PROJECTS_FILE": state / "projects.json",
             "CAPACITY_FILE": state / "capacity.json", "INVENTORY_FILE": state / "inventory.json",
             "CONNECTIONS_FILE": state / "connections.json", "SSH_KEY": state / "id_key",
+            "BOOT_IMAGE_FILE": state / "boot-image.json",
         }.items():
             p = patch.object(core, key, value)
             p.start()
@@ -67,6 +68,74 @@ class ComputeTests(unittest.TestCase):
             interface = request["spec"]["network_interfaces"][0]
             self.assertEqual(interface["public_ip_address"], {"static": True})
             self.assertEqual(len(interface["security_groups"]), 1)
+
+    def test_fast_h100_preference_uses_exact_image_and_256_gib_only_for_matching_offering(self):
+        configured = core.configure_boot_image(fast_h100=True)
+        self.assertEqual(configured["image_id"], core.FAST_H100_IMAGE["image_id"])
+        h100 = copy.deepcopy(OFFERING)
+        h100.update(platform="gpu-h100-sxm", region="eu-north1")
+        h100["projects"][0].update(region="eu-north1")
+        with patch.object(core, "gpu_capacity", return_value={"offerings": [h100]}), \
+             patch.object(core, "preflight_vm", return_value=GOOD) as preflight:
+            plan = core.plan_gpu_vm("training-box", "choice", "project-personal")
+        self.assertEqual(plan["image_id"], core.FAST_H100_IMAGE["image_id"])
+        self.assertEqual(plan["image_family"], "")
+        self.assertEqual(plan["disk_gib"], 256)
+        self.assertEqual(plan["boot_image"]["mode"], "exact-image")
+        self.assertEqual(preflight.call_args.kwargs["image_id"], core.FAST_H100_IMAGE["image_id"])
+        command = core._disk_arguments(plan)
+        self.assertEqual(command[command.index("--source-image-id") + 1], core.FAST_H100_IMAGE["image_id"])
+        self.assertNotIn("--source-image-family-image-family", command)
+
+        plan = self.plan()
+        self.assertEqual(plan["image_id"], "")
+        self.assertEqual(plan["image_family"], core.IMAGE_FAMILY)
+        self.assertEqual(plan["disk_gib"], core.DEFAULT_DISK_GIB)
+
+    def test_clearing_fast_image_returns_to_public_family(self):
+        core.configure_boot_image(fast_h100=True)
+        self.assertTrue(core.BOOT_IMAGE_FILE.exists())
+        result = core.configure_boot_image(clear=True)
+        self.assertFalse(core.BOOT_IMAGE_FILE.exists())
+        self.assertEqual(result["mode"], "public-family")
+
+    def test_imported_exact_image_can_be_selected_and_inspected(self):
+        configured = core.configure_boot_image(
+            image_id="computeimage-imported123", region="eu-north1",
+            platform="gpu-h100-sxm", disk_gib=300,
+        )
+        self.assertEqual(configured["image_id"], "computeimage-imported123")
+        self.assertEqual(core.configure_boot_image(show=True)["mode"], "exact-image")
+        source = core._boot_source("eu-north1", "gpu-h100-sxm")
+        self.assertEqual(source["disk_gib"], 300)
+        self.assertIn("User-configured", source["note"])
+
+    def test_imported_image_requires_complete_valid_scope(self):
+        with self.assertRaisesRegex(core.NebiusError, "region"):
+            core.configure_boot_image(
+                image_id="computeimage-imported123", region="",
+                platform="gpu-h100-sxm", disk_gib=256,
+            )
+        self.assertFalse(core.BOOT_IMAGE_FILE.exists())
+
+    def test_exact_image_preflight_checks_id_and_configured_disk_size(self):
+        calls = []
+        normal = self.preflight_cli(ssd_limit=256)
+        def cli(args, **kwargs):
+            calls.append(args)
+            if args[:3] == ["compute", "image", "get"]:
+                return {"status": {"state": "READY", "min_disk_size_bytes": 50 * 1024**3}}
+            return normal(args, **kwargs)
+        with patch.object(core, "run_cli", side_effect=cli):
+            result = core.preflight_vm(
+                "eu-west1", "preemptible", OFFERING["platform"], 1,
+                project_id=PROJECT["project_id"], preset=OFFERING["preset"],
+                subnet_id=PROJECT["subnet_id"], vm_name="new-vm", disk_gib=256,
+                image_id="computeimage-test",
+            )
+        self.assertTrue(result["ready"])
+        self.assertTrue(any(call[:3] == ["compute", "image", "get"] for call in calls))
+        self.assertFalse(any(call[:3] == ["compute", "image", "get-latest-by-family"] for call in calls))
 
     def test_unavailable_mode_is_not_rescued_by_other_modes_capacity(self):
         offering = copy.deepcopy(OFFERING)

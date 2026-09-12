@@ -1,5 +1,14 @@
 # Release notes
 
+## Unreleased · Exact boot image selection
+
+- Added an opt-in for the validated v4b H100 image and an exact-image selector
+  for copies imported into another project.
+- Image access, READY state and minimum disk size are checked before allocation;
+  the chosen source appears in the final launch review.
+- Other regions and GPU platforms keep the public Ubuntu/CUDA family, and the
+  public default remains unchanged until the user opts in.
+
 ## 0.7.9 · 2026-09-12 · SSH after reinstall
 
 - SSH and port forwarding offer the retained Nebius key for VMs labelled as created by this plugin, even after uninstall has removed the local VM registry.

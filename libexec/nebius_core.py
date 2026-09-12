@@ -44,6 +44,17 @@ SSH_KEY = HOME / ".ssh/nebius-ed25519"
 SSH_USER = "dev"
 DEFAULT_DISK_GIB = 200
 IMAGE_FAMILY = "ubuntu24.04-cuda13.0"
+BOOT_IMAGE_FILE = STATE_DIR / "boot-image.json"
+FAST_H100_IMAGE = {
+    "image_id": "computeimage-e00j76cr427pm08vg8",
+    "name": "image-boost-dev-h100-v4b-20260912",
+    "region": "eu-north1",
+    "platform": "gpu-h100-sxm",
+    "disk_gib": 256,
+    "ssh_user": "dev",
+    "tested_guest_boot_s": 10.759,
+    "documentation": "https://gitlab.nebius.dev/anton-smith/nebius-image-boost",
+}
 
 # Published PAYG USD prices checked against the official Compute pricing page.
 # Unified platforms are per GPU-hour. L40S also charges CPU and RAM separately.
@@ -182,6 +193,73 @@ def _read_json(path: Path, default: Any) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return default
+
+
+def _validate_boot_image(value: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(value, dict) or value.get("schema") != "nebius.omarchy-boot-image/v1":
+        raise NebiusError("The boot image preference is invalid; clear it or configure it again")
+    if not re.fullmatch(r"computeimage-[a-z0-9-]+", str(value.get("image_id") or "")):
+        raise NebiusError("The configured boot image ID is invalid")
+    if not re.fullmatch(r"[a-z]{2}-[a-z]+[0-9]+", str(value.get("region") or "")):
+        raise NebiusError("The configured boot image region is invalid")
+    if not re.fullmatch(r"gpu-[a-z0-9-]+", str(value.get("platform") or "")):
+        raise NebiusError("The configured boot image platform is invalid")
+    if not isinstance(value.get("disk_gib"), int) or not 50 <= value["disk_gib"] <= 30720:
+        raise NebiusError("The configured boot disk must be between 50 and 30720 GiB")
+    return value
+
+
+def boot_image_configuration() -> dict[str, Any]:
+    """Return the local exact-image preference; an empty result means public family."""
+    value = _read_json(BOOT_IMAGE_FILE, {})
+    return _validate_boot_image(value) if value else {}
+
+
+def configure_boot_image(*, fast_h100=False, clear=False, show=False, image_id="", region="",
+                         platform="", disk_gib=0, name="") -> dict[str, Any]:
+    """Opt into or clear the validated exact image. This changes local state only."""
+    if sum(bool(value) for value in (fast_h100, clear, show, image_id)) != 1:
+        raise NebiusError("Choose exactly one boot-image action")
+    if show:
+        value = boot_image_configuration()
+        return ({**value, "mode": "exact-image"} if value else
+                {"mode": "public-family", "image_family": IMAGE_FAMILY, "disk_gib": DEFAULT_DISK_GIB})
+    if clear:
+        try:
+            BOOT_IMAGE_FILE.unlink()
+        except FileNotFoundError:
+            pass
+        return {"mode": "public-family", "image_family": IMAGE_FAMILY, "disk_gib": DEFAULT_DISK_GIB}
+    if image_id:
+        value = {
+            "schema": "nebius.omarchy-boot-image/v1", "image_id": image_id,
+            "name": name or image_id, "region": region, "platform": platform,
+            "disk_gib": disk_gib, "ssh_user": SSH_USER,
+            "documentation": "User-configured exact image",
+        }
+    else:
+        value = {"schema": "nebius.omarchy-boot-image/v1", **FAST_H100_IMAGE}
+    value["configured_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    _validate_boot_image(value)
+    _atomic_json(BOOT_IMAGE_FILE, value)
+    return {**value, "mode": "exact-image", "access_note": "The signed-in Nebius account must be allowed to read this image."}
+
+
+def _boot_source(region: str, platform: str) -> dict[str, Any]:
+    configured = boot_image_configuration()
+    if configured and configured["region"] == region and configured["platform"] == platform:
+        return {
+            "image_id": configured["image_id"], "image_family": "", "disk_gib": configured["disk_gib"],
+            "label": configured.get("name") or configured["image_id"], "mode": "exact-image",
+            "note": ((f"Validated fast image ({configured['tested_guest_boot_s']}s guest boot in its recorded H100 test). "
+                      if configured.get("tested_guest_boot_s") else "User-configured exact image. ") +
+                     "Requires read access to the image."),
+        }
+    return {
+        "image_id": "", "image_family": IMAGE_FAMILY, "disk_gib": DEFAULT_DISK_GIB,
+        "label": IMAGE_FAMILY, "mode": "public-family",
+        "note": "Nebius public Ubuntu 24.04 / CUDA 13 image family.",
+    }
 
 
 def _run(command: list[str], *, timeout: int = 90, input_text: str | None = None) -> str:
@@ -702,6 +780,7 @@ def preflight_vm(
     subnet_id: str = "",
     vm_name: str = "",
     image_family: str = "",
+    image_id: str = "",
 ) -> dict[str, Any]:
     """Read-only admission checks. Capacity advice is not project eligibility."""
     if allocation not in {"on_demand", "preemptible"} or disk_gib < 0 or gpu_count < 1:
@@ -747,15 +826,18 @@ def preflight_vm(
                     warnings.append("Live capacity is unreported; Nebius can only confirm it at submission.")
                 else:
                     check("Live capacity", True, "Capacity is currently reported; it is not reserved")
-            if image_family:
-                catalog = capability.get("metadata", {}).get("parent_id")
-                if not catalog:
-                    raise NebiusError("The platform's image catalog could not be identified")
-                image = run_cli(["compute", "image", "get-latest-by-family", "--parent-id", catalog,
-                                 "--image-family", image_family, "--format", "json"], timeout=25)
+            if image_id or image_family:
+                if image_id:
+                    image = run_cli(["compute", "image", "get", "--id", image_id, "--format", "json"], timeout=25)
+                else:
+                    catalog = capability.get("metadata", {}).get("parent_id")
+                    if not catalog:
+                        raise NebiusError("The platform's image catalog could not be identified")
+                    image = run_cli(["compute", "image", "get-latest-by-family", "--parent-id", catalog,
+                                     "--image-family", image_family, "--format", "json"], timeout=25)
                 check("Boot image", image.get("status", {}).get("state") == "READY"
-                      and int(image.get("status", {}).get("min_disk_size_bytes") or 0) <= DEFAULT_DISK_GIB * 1024**3,
-                      "The boot image must be READY and fit the boot disk")
+                      and int(image.get("status", {}).get("min_disk_size_bytes") or 0) <= disk_gib * 1024**3,
+                      "The boot image must be readable, READY and fit the boot disk")
             if subnet_id:
                 subnets = _items(run_cli(["vpc", "subnet", "list", "--parent-id", project_id,
                                          "--all", "--format", "json"], timeout=25))
@@ -961,7 +1043,7 @@ def _availability_score(allocation: dict[str, Any]) -> tuple[int, int]:
 
 
 def _hourly_estimate(platform: str, gpu_count: int, vcpu_count: int, memory_gib: int,
-                     allocation: str = "preemptible") -> float | None:
+                     allocation: str = "preemptible", disk_gib: int = DEFAULT_DISK_GIB) -> float | None:
     gpu_price = (PREEMPTIBLE_GPU_USD if allocation == "preemptible" else ON_DEMAND_GPU_USD).get(platform)
     if gpu_price is None:
         return None
@@ -971,7 +1053,7 @@ def _hourly_estimate(platform: str, gpu_count: int, vcpu_count: int, memory_gib:
         compute += multiplier * (0.006 * vcpu_count + 0.0016 * memory_gib)
     elif platform == "gpu-l40s-d":
         compute += multiplier * (0.005 * vcpu_count + 0.0016 * memory_gib)
-    disk = DEFAULT_DISK_GIB * DISK_USD_PER_GIB_MONTH / 730
+    disk = disk_gib * DISK_USD_PER_GIB_MONTH / 730
     return round(compute + disk, 3)
 
 
@@ -1039,6 +1121,7 @@ def plan_gpu_vm(
     created_at = dt.datetime.now(dt.timezone.utc)
     expires_at = created_at + dt.timedelta(minutes=10)
     gpu_count = int(selected.get("gpu_count") or 1)
+    boot_source = _boot_source(str(selected["region"]), str(selected["platform"]))
     plan = {
         "schema": "nebius.omarchy-plan/v1",
         "plan_id": secrets.token_urlsafe(18),
@@ -1057,8 +1140,10 @@ def plan_gpu_vm(
         "capacity": selected[allocation],
         "subnet_id": project["subnet_id"],
         "subnet_name": project["subnet_name"],
-        "image_family": IMAGE_FAMILY,
-        "disk_gib": DEFAULT_DISK_GIB,
+        "image_family": boot_source["image_family"],
+        "image_id": boot_source["image_id"],
+        "boot_image": boot_source,
+        "disk_gib": boot_source["disk_gib"],
         "ssh_user": SSH_USER,
         "ssh_public_key": str(SSH_KEY.with_suffix(".pub")),
         "network_note": "Static public IPv4; inbound TCP 22 only. Outbound traffic is allowed. Use Ports for local application access.",
@@ -1069,6 +1154,7 @@ def plan_gpu_vm(
             int(selected.get("vcpu_count") or 0),
             int(selected.get("memory_gib") or 0),
             allocation,
+            boot_source["disk_gib"],
         ),
         "pricing_url": PRICING_URL,
         "pricing_checked_at": PRICING_CHECKED_AT,
@@ -1077,9 +1163,10 @@ def plan_gpu_vm(
     plan["reusable_disk"] = _select_reusable_disk(plan)
     plan["preflight"] = preflight_vm(
         project["region"], allocation, str(selected["platform"]), gpu_count, project_id=project["project_id"],
-        disk_gib=0 if plan["reusable_disk"] else DEFAULT_DISK_GIB,
+        disk_gib=0 if plan["reusable_disk"] else plan["disk_gib"],
         preset=plan["preset"], subnet_id=plan["subnet_id"], vm_name=vm_name,
         image_family="" if plan["reusable_disk"] else plan["image_family"],
+        image_id="" if plan["reusable_disk"] else plan["image_id"],
     )
     PLAN_DIR.mkdir(parents=True, exist_ok=True)
     PLAN_DIR.chmod(0o700)
@@ -1218,7 +1305,9 @@ def _known_create_rejection(plan: dict[str, Any], error: str) -> bool:
 def _select_reusable_disk(plan: dict[str, Any]) -> dict[str, Any] | None:
     for saved in sorted(_reusable_disks(), key=lambda item: item.get("saved_at", "")):
         if (saved["project"]["project_id"] == plan["project"]["project_id"]
-                and saved["image_family"] == plan["image_family"] and saved["disk_gib"] == plan["disk_gib"]):
+                and saved.get("image_family", "") == plan.get("image_family", "")
+                and saved.get("image_id", "") == plan.get("image_id", "")
+                and saved["disk_gib"] == plan["disk_gib"]):
             _verify_reusable_disk(saved)
             return saved
     return None
@@ -1228,7 +1317,8 @@ def _release_rejected_launch(plan: dict[str, Any], error: str) -> dict[str, Any]
     """Preserve disk and evidence after a verified rejection; never delete it."""
     saved = plan.get("reusable_disk") or {
         "disk_id": plan["disk_id"], "name": plan["name"] + "-boot", "project": plan["project"],
-        "source_request_id": plan["plan_id"], "image_family": plan["image_family"], "disk_gib": plan["disk_gib"],
+        "source_request_id": plan["plan_id"], "image_family": plan.get("image_family", ""),
+        "image_id": plan.get("image_id", ""), "disk_gib": plan["disk_gib"],
     }
     disk = _verify_reusable_disk(saved)
     saved = {**saved, "state": "available", "saved_at": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -1285,6 +1375,7 @@ def _vm_record(plan, vm_id, disk_id):
         "id": vm_id, "disk_id": disk_id, "name": plan["name"],
         "project_id": plan["project"]["project_id"], "region": plan["project"]["region"],
         "platform": plan["platform"], "preset": plan["preset"], "allocation": plan["allocation"],
+        "image_id": plan.get("image_id", ""), "image_family": plan.get("image_family", ""),
         "ssh_user": SSH_USER, "created_at": plan["submitted_at"],
         "source_request_id": (plan.get("reusable_disk") or {}).get("source_request_id", plan["plan_id"]),
     }
@@ -1446,7 +1537,7 @@ def _ssh_security_group(plan):
 
 
 def _disk_arguments(plan: dict[str, Any]) -> list[str]:
-    return [
+    command = [
         "compute",
         "disk",
         "create",
@@ -1460,8 +1551,12 @@ def _disk_arguments(plan: dict[str, Any]) -> list[str]:
         str(plan["disk_gib"]),
         "--type",
         "network_ssd",
-        "--source-image-family-image-family",
-        plan["image_family"],
+    ]
+    if plan.get("image_id"):
+        command += ["--source-image-id", plan["image_id"]]
+    else:
+        command += ["--source-image-family-image-family", plan["image_family"]]
+    return command + [
         "--block-size-bytes",
         "4096",
         "--format",
@@ -1535,9 +1630,10 @@ def create_gpu_vm(plan_id: str, *, dry_run: bool = False) -> dict[str, Any]:
     try:
         plan["preflight"] = preflight_vm(
             planned_project["region"], plan["allocation"], plan["platform"], plan["gpu_count"],
-            project_id=planned_project["project_id"], disk_gib=0 if reusable else DEFAULT_DISK_GIB,
+            project_id=planned_project["project_id"], disk_gib=0 if reusable else plan["disk_gib"],
             preset=plan["preset"], subnet_id=plan["subnet_id"], vm_name=plan["name"],
             image_family="" if reusable else plan["image_family"],
+            image_id="" if reusable else plan.get("image_id", ""),
         )
         _require_preflight(plan["preflight"])
         ensure_ssh_key()
@@ -2084,6 +2180,16 @@ def parse_args() -> argparse.Namespace:
     project_create.add_argument("--confirmed", action="store_true")
     project_create.add_argument("--dry-run", action="store_true")
     sub.add_parser("ensure-key")
+    boot_image = sub.add_parser("boot-image")
+    choice = boot_image.add_mutually_exclusive_group(required=True)
+    choice.add_argument("--fast-h100", action="store_true")
+    choice.add_argument("--clear", action="store_true")
+    choice.add_argument("--show", action="store_true")
+    choice.add_argument("--image-id")
+    boot_image.add_argument("--region", default="")
+    boot_image.add_argument("--platform", default="")
+    boot_image.add_argument("--disk-gib", type=int, default=0)
+    boot_image.add_argument("--name", default="")
     plan = sub.add_parser("plan")
     plan.add_argument("--name")
     plan.add_argument("--offering-id")
@@ -2149,6 +2255,12 @@ def main() -> int:
         elif args.command == "ensure-key":
             ensure_ssh_key()
             value = {"private_key": str(SSH_KEY), "public_key": str(SSH_KEY.with_suffix('.pub'))}
+        elif args.command == "boot-image":
+            value = configure_boot_image(
+                fast_h100=args.fast_h100, clear=args.clear, show=args.show,
+                image_id=args.image_id or "", region=args.region, platform=args.platform,
+                disk_gib=args.disk_gib, name=args.name,
+            )
         elif args.command == "plan":
             value = plan_gpu_vm(args.name, args.offering_id, args.project_id, args.allocation, args.auto_stop_hours)
         elif args.command == "preflight":

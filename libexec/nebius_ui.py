@@ -776,6 +776,7 @@ class App:
                         f"  Estimate:   {price}",
                         "No automatic stop is scheduled. Stop the VM manually when finished. Disks remain billable until deleted.",
                     ]
+                    notes.insert(1, f"Boot image\n  {plan['boot_image']['label']}\n  {plan['boot_image']['note']}")
                     notes.append("Network: static public IP; inbound SSH (TCP 22) only. Use Ports for local application access.")
                     if plan.get("reusable_disk"):
                         notes.insert(1, f"Boot disk\n  Reuse boot disk: {plan['reusable_disk']['name']}\n  No new disk will be created.")
