@@ -7,9 +7,12 @@ readonly PROFILE_NAME="omarchy-nebius-mcp"
 readonly SERVER_NAME="nebius"
 readonly PLUGIN_DIR="${HOME}/.config/omarchy/plugins/${PLUGIN_ID}"
 readonly STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/nebius"
+readonly MCP_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/nebius/uv"
 readonly RECEIPT="$STATE_DIR/install-receipt.json"
 readonly SETUP_LOG="$STATE_DIR/setup.log"
-readonly CLI="$HOME/.nebius/bin/nebius"
+readonly RUNTIME="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../libexec" && pwd)/nebius_runtime.py"
+readonly CLI="$(python3 "$RUNTIME")"
+readonly PRIVATE_CLI="$(python3 "$RUNTIME" private-cli)"
 readonly CLI_CREDENTIALS="$HOME/.nebius/credentials.yaml"
 readonly CLI_SHA256="fd8c967cdfbd6c28f69979c87c1c8f9c52244219ed4981c48f9b40be314bed98"
 readonly CLI_SHA256_ARM64="91edf41c2ac03a551b84347c1fff739d55f32d968df184bc9b08e4780de71bb9"
@@ -57,6 +60,12 @@ owned uv && uv_owned=true
 owned cli && cli_owned=true
 legacy_installed "✓ Installed MCP runtime (" && uv_owned=true
 legacy_installed "✓ Installed and verified Nebius CLI 0.12.269" && cli_owned=true
+owned_cli=$(jq -r '.cli_path // empty' "$RECEIPT" 2>/dev/null || true)
+[[ -n $owned_cli ]] || owned_cli="$HOME/.nebius/bin/nebius"
+if [[ $owned_cli != "$PRIVATE_CLI" && $owned_cli != "$HOME/.nebius/bin/nebius" ]]; then
+  cli_owned=false  # A receipt must never authorize deletion at an arbitrary path.
+fi
+[[ ! -L $owned_cli ]] || cli_owned=false
 
 printf '\n  Uninstall Nebius plugin\n\n'
 printf '  This removes local setup:\n'
@@ -66,7 +75,7 @@ printf '    • Dedicated Nebius profile and browser token\n'
 printf '    • Codex and Claude Code MCP registrations\n'
 printf '    • Plugin shortcuts\n'
 if [[ $uv_owned == true ]]; then printf '    • uv installed by this plugin (sudo may ask for your password)\n'; fi
-if [[ $cli_owned == true && -x $CLI ]]; then
+if [[ $cli_owned == true && -x $owned_cli ]]; then
   printf '\n  You can keep or remove the Nebius CLI.\n'
   printf '  Keeping it makes reinstall faster; removing it repeats CLI setup.\n'
 fi
@@ -94,7 +103,7 @@ else
     exit 1
   fi
 
-  if [[ $cli_policy == "ask" && $cli_owned == true && -x $CLI ]]; then
+  if [[ $cli_policy == "ask" && $cli_owned == true && -x $owned_cli ]]; then
     cli_choice=$(printf '%s\n%s\n' \
       "Keep Nebius CLI — reinstall will reuse it" \
       "Remove Nebius CLI — reinstall will download it again" | gum choose \
@@ -217,17 +226,24 @@ if [[ -f $BINDINGS ]]; then
   fi
 fi
 
-if [[ $cli_policy == "remove" && $cli_owned == true && -x $CLI ]]; then
-  installed_sha=$(sha256sum "$CLI" | cut -d' ' -f1)
+if [[ $cli_policy == "remove" && $cli_owned == true && -x $owned_cli ]]; then
+  installed_sha=$(sha256sum "$owned_cli" | cut -d' ' -f1)
   if [[ $installed_sha == "$CLI_SHA256" || $installed_sha == "$CLI_SHA256_ARM64" ]]; then
-    rm -f "$CLI"
-    rmdir "$HOME/.nebius/bin" 2>/dev/null || true
+    rm -f -- "$owned_cli"
+    rmdir "$(dirname -- "$owned_cli")" 2>/dev/null || true
   else
     printf '  Kept Nebius CLI because it no longer matches the plugin-installed binary.\n'
   fi
 fi
 
+ports_unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/nebius-ports.service"
+if [[ -f $ports_unit ]]; then
+  systemctl --user disable --now nebius-ports.service
+  rm -f -- "$ports_unit"
+  systemctl --user daemon-reload
+fi
 rm -rf -- "$STATE_DIR"
+rm -rf -- "$MCP_CACHE"
 
 remove_output=$(omarchy plugin remove "$PLUGIN_ID" --yes)
 printf '%s\n' "$remove_output"

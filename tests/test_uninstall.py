@@ -18,6 +18,7 @@ UNINSTALL = ROOT / "bin/nebius-uninstall"
 class UninstallTests(unittest.TestCase):
     def run_uninstall(self, home: Path, *arguments: str, path: str | None = None):
         environment = {**os.environ, "HOME": str(home), "XDG_STATE_HOME": str(home / ".state")}
+        environment["XDG_CACHE_HOME"] = str(home / ".cache")
         if path:
             environment["PATH"] = path
         return subprocess.run([str(UNINSTALL), *arguments], text=True, capture_output=True, env=environment)
@@ -46,6 +47,11 @@ class UninstallTests(unittest.TestCase):
             state_dir = home / ".state/nebius"
             state_dir.mkdir(parents=True)
             (state_dir / "setup.log").write_text("setup")
+            private_cache = home / ".cache/nebius/uv"
+            private_cache.mkdir(parents=True)
+            (private_cache / "environment").write_text("plugin runtime")
+            other_cache = home / ".cache/unrelated"
+            other_cache.write_text("keep")
             nebius_dir = home / ".nebius/bin"
             nebius_dir.mkdir(parents=True)
             config = home / ".nebius/config.yaml"
@@ -112,6 +118,8 @@ printf '%s\\n' 'Removed nebius.'
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse(plugin.exists())
             self.assertFalse(state_dir.exists())
+            self.assertFalse(private_cache.exists())
+            self.assertEqual(other_cache.read_text(), "keep")
             self.assertFalse(ssh_key.exists())
             self.assertFalse(ssh_key.with_suffix(".pub").exists())
             self.assertEqual(bindings.read_text(), "before\nafter\n")

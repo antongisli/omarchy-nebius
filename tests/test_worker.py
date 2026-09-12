@@ -1,6 +1,7 @@
 """Subprocess tests for the persistent worker, using a synthetic local CLI."""
 
 import json
+import hashlib
 import fcntl
 import os
 from pathlib import Path
@@ -20,7 +21,7 @@ class WorkerTests(unittest.TestCase):
             state.mkdir()
             previous = {"phase": "running", "stage": "instance", "disk_id": "computedisk-kept", "vm_id": "computeinstance-kept"}
             (state / "operation.json").write_text(json.dumps(previous))
-            with (state / "mutation.lock").open("a") as lock:
+            with (state / ("mutation-" + hashlib.sha256(b"computeinstance-test").hexdigest() + ".lock")).open("a") as lock:
                 fcntl.flock(lock, fcntl.LOCK_EX)
                 job_id = secrets.token_hex(12)
                 result = subprocess.run([sys.executable, str(ROOT / "libexec/nebius_job.py"), job_id,
@@ -39,14 +40,22 @@ class WorkerTests(unittest.TestCase):
         (state / "capacity.json").write_text(json.dumps({
             "schema": "nebius.omarchy-capacity/v3", "offerings": [{"region": "eu-west1"}]
         }))
-        # Executable copy is isolated from the installed CLI and real credentials.
+        # Isolate both the executable and the worker's credential-expiry check.
         fake = root / "fake-nebius"
         fake.write_bytes((ROOT / "tests/fake_nebius.py").read_bytes())
         fake.chmod(0o700)
         env = {**os.environ, "XDG_STATE_HOME": str(root), "NEBIUS_CLI_BIN": str(fake),
                "NEBIUS_TEST_STATE": str(root), "NEBIUS_TEST_SCENARIO": scenario}
         job_id = secrets.token_hex(12)
-        result = subprocess.run([sys.executable, str(ROOT / "libexec/nebius_job.py"), job_id,
+        runner = (
+            "import os, runpy, sys; from pathlib import Path; "
+            "sys.argv = sys.argv[1:]; "
+            "sys.path.insert(0, str(Path(sys.argv[0]).parent)); "
+            "import nebius_core; "
+            "nebius_core.CREDENTIALS_FILE = Path(os.environ['NEBIUS_TEST_STATE']) / 'credentials.yaml'; "
+            "runpy.run_path(sys.argv[0], run_name='__main__')"
+        )
+        result = subprocess.run([sys.executable, "-c", runner, str(ROOT / "libexec/nebius_job.py"), job_id,
                                  "create-project", "--region", "eu-west1", "--name", "my-training", "--confirmed"],
                                 env=env, capture_output=True, text=True, timeout=10)
         job = json.loads((state / "jobs" / f"{job_id}.json").read_text())
@@ -75,6 +84,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(job["result"]["project_name"], "my-training")
         self.assertEqual(job["result"]["subnet_id"], "vpcsubnet-created")
         self.assertEqual(operation["phase"], "ready")
+        self.assertEqual(job["operation"], operation)
         self.assertTrue((state / "activity.log").exists())
 
 

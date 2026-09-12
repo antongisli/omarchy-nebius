@@ -16,7 +16,7 @@
   <a href="https://github.com/antongisli/omarchy-nebius/actions/workflows/check.yml"><img src="https://github.com/antongisli/omarchy-nebius/actions/workflows/check.yml/badge.svg" alt="Checks"></a>
 </p>
 
-![Nebius GPU for Omarchy: GPU choices and keyboard launcher](preview.png)
+![Nebius GPU for Omarchy: GPU choices and local SSH port forwarding](preview.png)
 
 *Preview rendered from the plugin interface with example data. GPU availability is checked in your account.*
 
@@ -56,7 +56,7 @@ New to Nebius? [Create an account](https://console.nebius.com/) · [Check GPU pr
 <summary>What gets installed?</summary>
 
 - **uv**, from Arch's official repository through `omarchy-pkg-add uv`. The visible package installer may ask for your password.
-- **Nebius CLI 0.12.269**, installed in your home directory after checksum verification.
+- **Nebius CLI 0.12.269**, verified by SHA-256. A matching existing CLI is reused without claiming ownership. Otherwise a private copy is installed at `~/.local/share/nebius/cli/0.12.269/nebius` (respecting `XDG_DATA_HOME`); your existing CLI is never overwritten.
 - **Official Nebius MCP**, pinned to commit `6388bf779acdd331d9b2016230b37f8bf7177e12` and cached privately. Its runtime requires Python 3.13+; uv provisions the environment.
 - A dedicated **browser-auth profile** and **SSH key** for this plugin.
 - A constrained **`nebius` MCP registration** in each installed supported agent. Conflicting registrations are never overwritten.
@@ -64,6 +64,10 @@ New to Nebius? [Create an account](https://console.nebius.com/) · [Check GPU pr
 Omarchy supplies the ordinary terminal tools used by setup, including Python, Bash, jq, curl, OpenSSH, fzf, gum and util-linux. No shell profile is edited. [Full setup and security details](docs/reference.md).
 
 </details>
+
+## Update
+
+To update, run `omarchy plugin update nebius`, then close and reopen any existing Nebius terminal. The widget reloads through its versioned entry point; no desktop restart is needed. Start new agent sessions to load updated tools. Run **S · Set up / reconnect** if prompted; your account, SSH key and saved forwards are reused. [Release notes](CHANGELOG.md).
 
 ## Stay on the keyboard
 
@@ -73,7 +77,8 @@ Omarchy supplies the ordinary terminal tools used by setup, including Python, Ba
 | **J** | Jump into a running VM |
 | **V** | Your VMs: overview and lifecycle actions |
 | **C** | GPU capacity by family and region |
-| **A** | Follow progress or inspect the last result |
+| **P** | Saved local ports: add, open, pause or remove a forward |
+| **A** | Activity: concurrent operations, progress and results |
 | **S** | Set up or reconnect your account |
 | **U** | Uninstall Nebius plugin |
 
@@ -82,6 +87,41 @@ Inside the terminal, use **arrows** or **j/k**, **Enter**, **Esc**, **/** to sea
 Before setup, the bar shows only the Nebius icon. After setup, a small **running VM count badge** appears on the icon: **0–9**, then **9+**, with the exact count in the tooltip. An unknown or stale count displays **?**, so failed refreshes never look like an empty account. Middle-click the icon to jump into a VM.
 
 For direct desktop shortcuts, add the optional [Super+Ctrl+G/J/M bindings](config/keybindings.lua) after checking for conflicts with your existing bindings.
+
+## Use remote applications locally
+
+Choose **P · SSH port forwarding → N · Add port**, select the VM, and enter the application's remote TCP port. The local port defaults to the same number (or an unprivileged alternative for ports below 1024). If it is occupied, choose another. For example, remote port 8188 becomes `http://127.0.0.1:8188` on your laptop. From **Your VMs**, highlight a VM and press **P** to manage its ports directly.
+
+Both ports share one form: **Tab / ↑↓** switches fields, **←→** moves the cursor, **Enter** saves, and **Esc** cancels. A live diagram shows `this computer → SSH → VM application`. The local port follows the remote port until you customize it; validation keeps both values on screen.
+
+Forwards listen only on the laptop's loopback address and travel through encrypted SSH. No public application port, domain or HTTPS certificate is needed. Start the application on the VM, listening on its loopback interface; Docker applications must publish their port to the VM loopback interface too.
+
+Enabled mappings are saved and restored by a systemd user service after login, independently of the terminal window. They reconnect after sleep or network changes. Stopping a VM preserves its mappings without starting the VM automatically; deleting it disables them. The Ports list updates every two seconds without resetting selection or search; **R** refreshes immediately. It offers actions to open HTTP apps in a browser, copy the address, inspect errors, pause/resume or remove a mapping. **Connected** describes the SSH tunnel, not application health. Requests in flight can fail during sleep or reconnect; refresh the browser afterward.
+
+<details>
+<summary>See port forwarding, VM management and Activity</summary>
+
+![One form for both ports, with keyboard navigation and an SSH route diagram](docs/screenshots/port-form.png)
+
+![Saved port forwards with live tunnel status](docs/screenshots/ports.png)
+
+![VM overview with direct SSH, start, stop and deletion shortcuts](docs/screenshots/overview.png)
+
+![Activity separates in-progress work from saved results and actionable failures](docs/screenshots/activity.png)
+
+These captures use the production drawing code with synthetic example data, not a user's account. They do not imply that ComfyUI or model-serving applications are installed automatically.
+
+</details>
+
+New VMs receive a **static public IPv4 address and an explicit security group allowing only inbound SSH (TCP 22)**. Outbound traffic is allowed for package and model downloads. Existing VMs are not modified. The SSH rule permits any source IP so changing laptop networks does not lock you out; SSH key authentication is still required. Plugin-owned SSH security groups can be reused within a network and remain after VM deletion.
+
+Start, stop and deletion return immediately to the VM overview. Independent VMs can run operations concurrently; conflicting operations on the same VM are rejected. Activity stores each job separately. If a lifecycle worker is interrupted, **Activity → operation → Resume operation** reconciles its saved cloud operation before finishing cleanup. VM deletion always finishes before checking and deleting its boot disk.
+
+Activity puts running operations first, with recent results below, and updates every two seconds while preserving selection and search. Older completed jobs use their saved results or history, not a misleading waiting message. Interrupted work says **Check outcome**; Resume is offered only when the exact request was saved.
+
+From the VM list: **C** connects, **P** opens SSH ports, **S** stops, **T** starts, and **D** reviews deletion for the highlighted VM. Start/stop/delete each use one review, with a named confirmation key and **Esc** to cancel. Deletion never submits just because you press Enter to read the next page. Action menus show letter keys beside choices and in the footer; resource lists offer number keys and `/` search. During a submitted operation, **Esc or B** returns to the overview without cancelling the work; **A** reopens Activity.
+
+SSH checks login readiness for up to two minutes before opening the session, including the first boot's user/key setup. The wait shows progress and **Esc** returns without stopping the VM. A failed connection stays on screen with retry and username actions; the latest diagnostic is retained in local `ssh-last-error.json`. Changed host keys are never accepted automatically.
 
 ## Use your agent
 
@@ -113,7 +153,7 @@ Choose **U · Uninstall Nebius plugin** for the full local cleanup. You can keep
 
 ## Project status
 
-Early release for Omarchy Quattro. Built and checked on a real Omarchy desktop, with regression coverage for keyboard navigation, narrow terminals, preflight failures and resource cleanup. [Development guide](docs/development.md) · [Known limits and implementation details](docs/reference.md) · [Report an issue](https://github.com/antongisli/omarchy-nebius/issues)
+Public beta for Omarchy Quattro. Built and checked on a real Omarchy desktop, with regression coverage for keyboard navigation, narrow terminals, preflight failures, installer ownership and resource cleanup. [Release notes](CHANGELOG.md) · [Development guide](docs/development.md) · [Known limits and implementation details](docs/reference.md) · [Report an issue](https://github.com/antongisli/omarchy-nebius/issues)
 
 
 Maintained by [Anton Smith](https://github.com/antongisli). Uses the official Nebius CLI and MCP and has no dependency on the separate `other-tool` integration. Code is [MIT licensed](LICENSE); Nebius marks remain the property of their owners. [Brand asset sources](assets/NOTICE.md).

@@ -24,11 +24,13 @@ import time
 import threading
 from typing import Any
 
+from nebius_runtime import cli_path
+
 
 PROFILE = "omarchy-nebius-mcp"
 MANAGED_BY = "omarchy-nebius"
 HOME = Path.home()
-CLI = Path(os.environ.get("NEBIUS_CLI_BIN", HOME / ".nebius/bin/nebius"))
+CLI = cli_path()
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state")) / "nebius"
 PLAN_DIR = STATE_DIR / "plans"
 REGISTRY_FILE = STATE_DIR / "vms.json"
@@ -79,27 +81,32 @@ _mutation_state = threading.local()
 
 
 @contextlib.contextmanager
-def mutation_guard(*, wait=False):
-    if getattr(_mutation_state, "owned", False):
+def mutation_guard(*, wait=False, resource="global"):
+    owned = getattr(_mutation_state, "owned", set())
+    if resource in owned:
         yield
         return
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    with (STATE_DIR / "mutation.lock").open("a") as handle:
+    name = "mutation.lock" if resource == "global" else "mutation-" + hashlib.sha256(resource.encode()).hexdigest() + ".lock"
+    with (STATE_DIR / name).open("a") as handle:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
         except BlockingIOError as error:
-            raise NebiusError("Another Nebius operation is running. Open activity to follow it.") from error
-        _mutation_state.owned = True
+            raise NebiusError("Another operation is running for this resource. Open Activity to follow it.") from error
+        _mutation_state.owned = owned | {resource}
         try:
             yield
         finally:
-            _mutation_state.owned = False
+            _mutation_state.owned = owned
 
 
 def cloud_mutation(function):
     @functools.wraps(function)
     def locked(*args, **kwargs):
-        with mutation_guard(wait=bool(kwargs.get("automatic"))):
+        key = "global"
+        if function.__name__ in {"start_vm", "stop_vm", "delete_vm"}:
+            key = str(args[0] if args else kwargs["vm_id"])
+        with mutation_guard(wait=bool(kwargs.get("automatic")), resource=key):
             return function(*args, **kwargs)
     return locked
 
@@ -258,17 +265,26 @@ def project_context(project_id: str | None = None, tenant_id: str | None = None)
 
 
 def _write_operation(phase: str, stage: str, message: str, **details: Any) -> None:
-    _atomic_json(
-        OPERATION_FILE,
-        {
+    if os.environ.get("NEBIUS_JOB_ID") and "cloud_operations" not in details:
+        details["cloud_operations"] = current_operation().get("cloud_operations", [])
+    value = {
             "schema": "nebius.omarchy-operation/v1",
             "phase": phase,
             "stage": stage,
             "message": message,
             "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             **details,
-        },
-    )
+        }
+    _atomic_json(OPERATION_FILE, value)
+    job_id = os.environ.get("NEBIUS_JOB_ID", "")
+    if re.fullmatch(r"[a-f0-9]{24}", job_id):
+        _atomic_json(STATE_DIR / "jobs" / (job_id + ".operation.json"), value)
+
+
+def current_operation():
+    job_id = os.environ.get("NEBIUS_JOB_ID", "")
+    path = STATE_DIR / "jobs" / (job_id + ".operation.json") if re.fullmatch(r"[a-f0-9]{24}", job_id) else OPERATION_FILE
+    return _read_json(path, {})
 
 
 def _items(value: Any) -> list[dict[str, Any]]:
@@ -1032,6 +1048,7 @@ def plan_gpu_vm(
         "disk_gib": DEFAULT_DISK_GIB,
         "ssh_user": SSH_USER,
         "ssh_public_key": str(SSH_KEY.with_suffix(".pub")),
+        "network_note": "Static public IPv4; inbound TCP 22 only. Outbound traffic is allowed. Use Ports for local application access.",
         "runtime_note": "No automatic stop is scheduled. Stop the VM manually when finished; disks remain billable until deleted.",
         "estimated_usd_per_hour": _hourly_estimate(
             str(selected["platform"]),
@@ -1108,6 +1125,16 @@ def _registry() -> dict[str, Any]:
 
 def _save_registry(value: dict[str, Any]) -> None:
     _atomic_json(REGISTRY_FILE, value)
+
+
+def _update_vm_record(vm_id, changes=None, *, remove=False):
+    with mutation_guard(wait=True, resource="registry"):
+        registry = _registry()
+        previous = next((vm for vm in registry["vms"] if vm.get("id") == vm_id), {})
+        registry["vms"] = [vm for vm in registry["vms"] if vm.get("id") != vm_id]
+        if not remove:
+            registry["vms"].append({**previous, **(changes or {}), "id": vm_id})
+        _save_registry(registry)
 
 
 def _registered(vm_id: str) -> dict[str, Any]:
@@ -1290,11 +1317,10 @@ def recover_launch(request_id: str) -> dict[str, Any]:
     if existing:
         vm = existing
     else:
-        registry["vms"].append(vm)
-        _save_registry(registry)
+        _update_vm_record(vm_id, vm)
     for key in ("auto_stop_hours", "auto_stop_at", "auto_stop_warning"):
         vm.pop(key, None)
-    _save_registry(registry)
+    _update_vm_record(vm_id, vm)
     if plan.get("reusable_disk"):
         _atomic_json(_reusable_path(disk_id), {**plan["reusable_disk"], "state": "consumed", "vm_id": vm_id})
     path.unlink()
@@ -1360,7 +1386,8 @@ def _instance_request(plan: dict[str, Any], disk_id: str, *, cloud_init: str | N
                     "name": "default",
                     "subnet_id": plan["subnet_id"],
                     "ip_address": {},
-                    "public_ip_address": {"static": False},
+                    "public_ip_address": {"static": True},
+                    "security_groups": [{"id": plan.get("security_group_id", "vpcsecuritygroup-validation")}],
                 }
             ],
         },
@@ -1371,6 +1398,38 @@ def _instance_request(plan: dict[str, Any], disk_id: str, *, cloud_init: str | N
     else:
         request["spec"]["reservation_policy"] = {"policy": "FORBID"}
     return request
+
+
+def _ssh_security_group(plan):
+    """Attach only a verified SSH-only group; never fall back to the permissive default."""
+    subnet = run_cli(["vpc", "subnet", "get", plan["subnet_id"], "--format", "json"])
+    network_id = subnet.get("spec", {}).get("network_id")
+    if not network_id:
+        raise NebiusError("Could not determine the subnet network for SSH-only access")
+    rules = [
+        {"access": "ALLOW", "protocol": "TCP", "type": "STATEFUL", "priority": 100,
+         "ingress": {"source_cidrs": ["0.0.0.0/0"], "destination_ports": [22]}},
+        {"access": "ALLOW", "protocol": "ANY", "type": "STATEFUL", "priority": 100,
+         "egress": {"destination_cidrs": ["0.0.0.0/0"]}},
+    ]
+    with mutation_guard(wait=True, resource="network-" + network_id):
+        groups = _items(run_cli(["vpc", "security-group", "list", "--parent-id", plan["project"]["project_id"], "--format", "json"]))
+        for group in groups:
+            if (group.get("metadata", {}).get("labels", {}).get("managed-by") != MANAGED_BY
+                    or group.get("spec", {}).get("network_id") != network_id):
+                continue
+            group_id = group["metadata"]["id"]
+            actual = _items(run_cli(["vpc", "security-rule", "list", "--parent-id", group_id, "--format", "json"]))
+            if len(actual) == 2 and all(any(item.get("spec") == rule for item in actual) for rule in rules):
+                return group_id
+        group = run_cli(["vpc", "security-group", "create", json.dumps({
+            "metadata": {"parent_id": plan["project"]["project_id"], "name": "omarchy-ssh-" + secrets.token_hex(4),
+                         "labels": {"managed-by": MANAGED_BY}}, "spec": {"network_id": network_id}}), "--format", "json"])
+        group_id = _resource_id(group, "vpcsecuritygroup")
+        for index, rule in enumerate(rules):
+            run_cli(["vpc", "security-rule", "create", json.dumps({
+                "metadata": {"parent_id": group_id, "name": ["ssh", "outbound"][index]}, "spec": rule}), "--format", "json"])
+        return group_id
 
 
 def _disk_arguments(plan: dict[str, Any]) -> list[str]:
@@ -1471,6 +1530,8 @@ def create_gpu_vm(plan_id: str, *, dry_run: bool = False) -> dict[str, Any]:
         ensure_ssh_key()
         request = _instance_request(plan, reusable["disk_id"] if reusable else "computedisk-validation")
         plan["request_validation"] = validate_instance_request(request)
+        plan["security_group_id"] = _ssh_security_group(plan)
+        request["spec"]["network_interfaces"][0]["security_groups"] = [{"id": plan["security_group_id"]}]
     except (NebiusError, OSError) as error:
         _write_operation("error", "preflight", str(error).splitlines()[0][:300], details=str(error),
                          recovery="No new disk or VM was created. Correct the failed check, then review again.",
@@ -1547,8 +1608,7 @@ def create_gpu_vm(plan_id: str, *, dry_run: bool = False) -> dict[str, Any]:
 
     registry = _registry()
     vm = _vm_record(plan, vm_id, disk_id)
-    registry["vms"].append(vm)
-    _save_registry(registry)
+    _update_vm_record(vm_id, vm)
     if reusable:
         _atomic_json(_reusable_path(reusable["disk_id"]), {**reusable, "state": "consumed", "vm_id": vm_id})
     _pending_path(plan_id).unlink()
@@ -1578,11 +1638,11 @@ def create_gpu_vm(plan_id: str, *, dry_run: bool = False) -> dict[str, Any]:
         )
         raise
     vm.update(ready)
-    _save_registry(registry)
+    _update_vm_record(vm_id, vm)
     _write_operation(
         "ready",
         "done",
-        "VM is ready for SSH",
+        "VM is running; SSH login is checked when you connect",
         name=vm["name"],
         vm_id=vm_id,
         disk_id=disk_id,
@@ -1756,6 +1816,72 @@ def _refresh_vm(vm_id: str) -> dict[str, Any]:
     return registered
 
 
+def _cloud_operation_path(resource_id):
+    return STATE_DIR / "cloud-operations" / (hashlib.sha256(resource_id.encode()).hexdigest() + ".json")
+
+
+def _compute_mutation(kind, action, resource_id):
+    """Journal submission before waiting; interrupted requests are never replayed blindly."""
+    path = _cloud_operation_path(resource_id)
+    saved = _read_json(path, {})
+    if saved and saved.get("action") != action:
+        raise NebiusError("An earlier operation on this resource needs reconciliation in Activity")
+    if saved.get("phase") == "done":
+        return
+    if not saved:
+        saved = {"kind": kind, "action": action, "resource_id": resource_id, "phase": "submitting"}
+        _atomic_json(path, saved)
+        try:
+            response = run_cli(["compute", kind, action, resource_id, "--async", "--format", "json"], timeout=90)
+        except NebiusError as error:
+            if re.search(r"code = (InvalidArgument|PermissionDenied|Unauthenticated|FailedPrecondition|ResourceExhausted|NotFound)\b", str(error)):
+                path.unlink(missing_ok=True)
+            raise
+        operation_id = response.get("id") if isinstance(response, dict) else response
+        if not isinstance(operation_id, str) or not operation_id:
+            raise NebiusError("Cloud submission returned no operation ID. Inspect the resource before retrying.")
+        saved.update(operation_id=operation_id, phase="running")
+        _atomic_json(path, saved)
+    if not saved.get("operation_id"):
+        # Reconcile desired state after an ambiguous submission without submitting again.
+        try:
+            resource = run_cli(["compute", kind, "get", resource_id, "--format", "json"])
+        except NebiusError as error:
+            if action == "delete" and ("notfound" in str(error).lower() or "not found" in str(error).lower()):
+                _atomic_json(path, {**saved, "phase": "done"})
+                return
+            raise
+        desired = {"start": "running", "stop": "stopped"}.get(action)
+        if desired and str(resource.get("status", {}).get("state", "")).lower() == desired:
+            if action == "delete":
+                _atomic_json(path, {**saved, "phase": "done"})
+            else:
+                path.unlink(missing_ok=True)
+            return
+        raise NebiusError("Cloud submission outcome is unknown. Inspect the resource in the Nebius console; no duplicate request was sent.")
+    operation = current_operation()
+    cloud_operations = operation.get("cloud_operations", [])
+    if not any(o.get("operation_id") == saved["operation_id"] for o in cloud_operations):
+        cloud_operations.append({"operation_id": saved["operation_id"], "resource_id": resource_id, "action": action})
+    _write_operation("running", action, operation.get("message", "Waiting for cloud operation"),
+                     resource_id=resource_id, operation_id=saved["operation_id"], cloud_operations=cloud_operations)
+    deadline = time.monotonic() + 900
+    while time.monotonic() < deadline:
+        result = run_cli(["compute", kind, "operation", "get", saved["operation_id"], "--format", "json"])
+        if result.get("status") is not None:
+            status = result["status"]
+            if status.get("code", 0) not in (0, "0", "OK"):
+                path.unlink(missing_ok=True)
+                raise NebiusError("Cloud operation failed: " + status.get("message", str(status)))
+            if action == "delete":
+                _atomic_json(path, {**saved, "phase": "done"})
+            else:
+                path.unlink(missing_ok=True)
+            return
+        time.sleep(3)
+    raise NebiusError("Cloud operation is still pending. Resume it in Activity; its operation ID is saved.")
+
+
 @cloud_mutation
 def stop_vm(vm_id: str, *, automatic: bool = False) -> dict[str, Any]:
     if automatic:
@@ -1763,7 +1889,7 @@ def stop_vm(vm_id: str, *, automatic: bool = False) -> dict[str, Any]:
         return {"id": vm_id, "skipped": True, "reason": "Auto-stop has been removed; no cloud request was sent"}
     _, vm = _accessible_vm(vm_id)
     _write_operation("running", "stop", f"Stopping {vm['name']}", vm_id=vm_id)
-    run_cli(["compute", "instance", "stop", vm_id, "--format", "json"], timeout=600)
+    _compute_mutation("instance", "stop", vm_id)
     _write_operation("ready", "stop", f"{vm['name']} is stopped", vm_id=vm_id)
     return {"id": vm_id, "name": vm.get("name"), "state": "stopped"}
 
@@ -1772,7 +1898,7 @@ def stop_vm(vm_id: str, *, automatic: bool = False) -> dict[str, Any]:
 def start_vm(vm_id: str) -> dict[str, Any]:
     _, vm = _accessible_vm(vm_id)
     _write_operation("running", "start", f"Starting {vm['name']}", vm_id=vm_id)
-    run_cli(["compute", "instance", "start", vm_id, "--format", "json"], timeout=600)
+    _compute_mutation("instance", "start", vm_id)
     ready = _wait_for_instance(vm_id)
     _write_operation("ready", "start", f"{vm['name']} is running", vm_id=vm_id)
     return {"id": vm_id, "name": vm.get("name"), **ready}
@@ -1788,12 +1914,14 @@ def delete_saved_disk(disk_id: str, confirmed: bool = False) -> dict[str, Any]:
     personal = sync_personal_projects()
     if saved["project"]["project_id"] not in {p["project_id"] for p in personal["projects"]}:
         raise NebiusError("This disk is outside your personal projects")
-    disk = _verify_reusable_disk(saved)
-    if disk.get("spec", {}).get("forbid_deletion"):
-        raise NebiusError("This disk has deletion protection. No resources were changed")
+    if not _cloud_operation_path(disk_id).exists():
+        disk = _verify_reusable_disk(saved)
+        if disk.get("spec", {}).get("forbid_deletion"):
+            raise NebiusError("This disk has deletion protection. No resources were changed")
     _write_operation("running", "delete", "Deleting unused boot disk " + saved["name"], disk_id=disk_id)
-    run_cli(["compute", "disk", "delete", disk_id, "--format", "json"], timeout=600)
+    _compute_mutation("disk", "delete", disk_id)
     _atomic_json(_reusable_path(disk_id), {**saved, "state": "deleted", "deleted_at": dt.datetime.now(dt.timezone.utc).isoformat()})
+    _cloud_operation_path(disk_id).unlink(missing_ok=True)
     _write_operation("ready", "delete", "Unused boot disk deleted", disk_id=disk_id)
     return {"disk_id": disk_id, "deleted": True}
 
@@ -1821,19 +1949,21 @@ def delete_vm(vm_id: str, confirmed: bool) -> dict[str, Any]:
         raise NebiusError("Deletion requires an explicit confirmation")
     vm = _registered(vm_id)
     if not vm.get("instance_deleted"):
-        _refresh_vm(vm_id)
-        instance, _ = _accessible_vm(vm_id)
-        if instance.get("spec", {}).get("boot_disk", {}).get("existing_disk", {}).get("id") != vm.get("disk_id"):
-            raise NebiusError("The VM's boot disk changed. Inspect its storage before deleting; no resources were changed")
+        pending = _read_json(_cloud_operation_path(vm_id), {})
+        if not pending:
+            _refresh_vm(vm_id)
+            instance, _ = _accessible_vm(vm_id)
+            if instance.get("spec", {}).get("boot_disk", {}).get("existing_disk", {}).get("id") != vm.get("disk_id"):
+                raise NebiusError("The VM's boot disk changed. Inspect its storage before deleting; no resources were changed")
         _write_operation("running", "delete", f"Deleting {vm.get('name')}", vm_id=vm_id)
-        run_cli(["compute", "instance", "delete", vm_id, "--format", "json"], timeout=600)
-        registry = _registry()
-        for entry in registry["vms"]:
-            if entry.get("id") == vm_id:
-                entry["instance_deleted"] = True
-        _save_registry(registry)
+        _compute_mutation("instance", "delete", vm_id)
+        _update_vm_record(vm_id, {"instance_deleted": True})
+    import nebius_ports
+    nebius_ports.disable_vm(vm_id)
     disk_id = str(vm.get("disk_id") or "")
-    if disk_id.startswith("computedisk-"):
+    if disk_id.startswith("computedisk-") and _cloud_operation_path(disk_id).exists():
+        _compute_mutation("disk", "delete", disk_id)
+    elif disk_id.startswith("computedisk-"):
         disk = run_cli(["compute", "disk", "get", disk_id, "--format", "json"], timeout=25)
         metadata, status = disk.get("metadata", {}), disk.get("status", {})
         labels = metadata.get("labels") or {}
@@ -1850,10 +1980,11 @@ def delete_vm(vm_id: str, confirmed: bool) -> dict[str, Any]:
                for row in attached):
             raise NebiusError("VM deleted, but another VM uses its boot disk. The disk was preserved")
         _write_operation("running", "delete", "VM deleted; deleting its boot disk", vm_id=vm_id, disk_id=disk_id)
-        run_cli(["compute", "disk", "delete", disk_id, "--format", "json"], timeout=600)
-    registry = _registry()
-    registry["vms"] = [entry for entry in registry["vms"] if entry.get("id") != vm_id]
-    _save_registry(registry)
+        _compute_mutation("disk", "delete", disk_id)
+    _update_vm_record(vm_id, remove=True)
+    _cloud_operation_path(vm_id).unlink(missing_ok=True)
+    if disk_id:
+        _cloud_operation_path(disk_id).unlink(missing_ok=True)
     return {"id": vm_id, "name": vm.get("name"), "deleted": True, "disk_deleted": bool(disk_id)}
 
 
@@ -1881,6 +2012,8 @@ def connect_vm(vm_id: str, *, launch: bool = True, username: str | None = None) 
         "-o",
         "StrictHostKeyChecking=accept-new",
         "-o",
+        "HostKeyAlias=" + vm_id,
+        "-o",
         "ConnectTimeout=10",
         "-o",
         "ConnectionAttempts=2",
@@ -1893,14 +2026,16 @@ def connect_vm(vm_id: str, *, launch: bool = True, username: str | None = None) 
     if launch:
         try:
             subprocess.Popen(
-                ["omarchy-launch-tui", "--app-id=org.nebius.ssh", *command],
+                ["omarchy-launch-tui", "--app-id=org.nebius.ssh",
+                 str(Path(__file__).resolve().parent.parent / "bin/nebius-ui"), "connect", "--vm-id", vm_id, "--username", username],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
         except OSError as error:
             raise NebiusError(f"Could not open the SSH terminal: {error}") from error
-    return {"id": vm_id, "name": vm.get("name"), "public_ip": address, "launched": launch, "command": command}
+    return {"id": vm_id, "name": vm.get("name"), "public_ip": address, "managed": bool(vm.get("managed")),
+            "launched": launch, "command": command}
 
 
 def _print(value: Any) -> None:
@@ -1963,6 +2098,11 @@ def parse_args() -> argparse.Namespace:
     disk_delete.add_argument("--confirmed", action="store_true")
     storage = sub.add_parser("storage")
     storage.add_argument("--vm-id", required=True)
+    ports = sub.add_parser("ports")
+    ports.add_argument("--action", choices=["list", "add"], default="list")
+    ports.add_argument("--vm-id")
+    ports.add_argument("--remote-port")
+    ports.add_argument("--local-port")
     return parser.parse_args()
 
 
@@ -2006,6 +2146,9 @@ def main() -> int:
             value = delete_saved_disk(args.disk_id, args.confirmed)
         elif args.command == "storage":
             value = vm_storage(args.vm_id)
+        elif args.command == "ports":
+            import nebius_ports
+            value = nebius_ports.listing() if args.action == "list" else nebius_ports.add(args.vm_id, args.remote_port, args.local_port)
         elif args.command == "connect":
             value = connect_vm(args.vm_id, launch=not args.no_launch, username=args.username)
         else:

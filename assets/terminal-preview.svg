@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="800" height="660" viewBox="0 0 800 660">
-<title>Nebius GPU picker: production menu, synthetic example data</title>
+<title>Nebius: production menu, synthetic example data</title>
 <rect width="100%" height="100%" fill="#101820"/>
 <rect x="20" y="22" width="60" height="22" fill="#E0FF4F"/>
 <text x="20" y="38" font-family="monospace" font-size="16" font-weight="700" fill="#052B42">N</text>
@@ -334,6 +334,9 @@
 <text x="120" y="214" font-family="monospace" font-size="16" font-weight="700" fill="#052B42">1</text>
 <text x="130" y="214" font-family="monospace" font-size="16" font-weight="700" fill="#052B42">0</text>
 <text x="140" y="214" font-family="monospace" font-size="16" font-weight="700" fill="#052B42">0</text>
+<text x="160" y="214" font-family="monospace" font-size="16" font-weight="700" fill="#052B42">[</text>
+<text x="170" y="214" font-family="monospace" font-size="16" font-weight="700" fill="#052B42">1</text>
+<text x="180" y="214" font-family="monospace" font-size="16" font-weight="700" fill="#052B42">]</text>
 <text x="60" y="236" font-family="monospace" font-size="16" font-weight="400" fill="#E0FF4F">8</text>
 <text x="80" y="236" font-family="monospace" font-size="16" font-weight="400" fill="#E0FF4F">a</text>
 <text x="90" y="236" font-family="monospace" font-size="16" font-weight="400" fill="#E0FF4F">v</text>
@@ -376,6 +379,9 @@
 <text x="120" y="280" font-family="monospace" font-size="16" font-weight="700" fill="#EDF2F5">2</text>
 <text x="130" y="280" font-family="monospace" font-size="16" font-weight="700" fill="#EDF2F5">0</text>
 <text x="140" y="280" font-family="monospace" font-size="16" font-weight="700" fill="#EDF2F5">0</text>
+<text x="160" y="280" font-family="monospace" font-size="16" font-weight="700" fill="#EDF2F5">[</text>
+<text x="170" y="280" font-family="monospace" font-size="16" font-weight="700" fill="#EDF2F5">2</text>
+<text x="180" y="280" font-family="monospace" font-size="16" font-weight="700" fill="#EDF2F5">]</text>
 <text x="60" y="302" font-family="monospace" font-size="16" font-weight="400" fill="#EDF2F5">4</text>
 <text x="80" y="302" font-family="monospace" font-size="16" font-weight="400" fill="#EDF2F5">a</text>
 <text x="90" y="302" font-family="monospace" font-size="16" font-weight="400" fill="#EDF2F5">v</text>
@@ -424,6 +430,9 @@
 <text x="200" y="346" font-family="monospace" font-size="16" font-weight="700" fill="#EDF2F5">A</text>
 <text x="210" y="346" font-family="monospace" font-size="16" font-weight="700" fill="#EDF2F5">d</text>
 <text x="220" y="346" font-family="monospace" font-size="16" font-weight="700" fill="#EDF2F5">a</text>
+<text x="240" y="346" font-family="monospace" font-size="16" font-weight="700" fill="#EDF2F5">[</text>
+<text x="250" y="346" font-family="monospace" font-size="16" font-weight="700" fill="#EDF2F5">3</text>
+<text x="260" y="346" font-family="monospace" font-size="16" font-weight="700" fill="#EDF2F5">]</text>
 <text x="60" y="368" font-family="monospace" font-size="16" font-weight="400" fill="#EDF2F5">u</text>
 <text x="70" y="368" font-family="monospace" font-size="16" font-weight="400" fill="#EDF2F5">n</text>
 <text x="80" y="368" font-family="monospace" font-size="16" font-weight="400" fill="#EDF2F5">a</text>

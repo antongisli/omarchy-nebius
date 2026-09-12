@@ -64,6 +64,9 @@ class ComputeTests(unittest.TestCase):
                 self.assertEqual(request["spec"]["preemptible"]["on_preemption"], "STOP")
                 self.assertEqual(request["spec"]["recovery_policy"], "FAIL")
             self.assertEqual(request["spec"]["boot_disk"]["attach_mode"], "READ_WRITE")
+            interface = request["spec"]["network_interfaces"][0]
+            self.assertEqual(interface["public_ip_address"], {"static": True})
+            self.assertEqual(len(interface["security_groups"]), 1)
 
     def test_unavailable_mode_is_not_rescued_by_other_modes_capacity(self):
         offering = copy.deepcopy(OFFERING)
@@ -172,6 +175,7 @@ class ComputeTests(unittest.TestCase):
                 raise core.NebiusError("timed out")
             self.fail(f"Unexpected call: {args}")
         with patch.object(core, "project_context", return_value=PROJECT), \
+             patch.object(core, "_ssh_security_group", return_value="vpcsecuritygroup-ssh"), \
              patch.object(core, "preflight_vm", return_value=GOOD), \
              patch.object(core, "validate_instance_request", return_value={"valid": True}), \
              patch.object(core, "ensure_ssh_key"), patch.object(core, "_cloud_init", return_value=""), \
@@ -318,6 +322,7 @@ class ComputeTests(unittest.TestCase):
                 return {"metadata": {"id": "computeinstance-new"}}
             self.fail(f"Unexpected cloud operation: {args[:3]}")
         with patch.object(core, "run_cli", side_effect=cli), patch.object(core, "project_context", return_value=PROJECT), \
+             patch.object(core, "_ssh_security_group", return_value="vpcsecuritygroup-ssh"), \
              patch.object(core, "preflight_vm", return_value=GOOD) as quota, patch.object(core, "ensure_ssh_key"), \
              patch.object(core, "_cloud_init", return_value="#cloud-config"), \
              patch.object(core, "validate_instance_request", return_value={"valid": True}) as validator, \
@@ -473,9 +478,9 @@ class ComputeTests(unittest.TestCase):
                 core.delete_saved_disk(plan["disk_id"])
             cli.assert_not_called()
         with patch.object(core, "sync_personal_projects", return_value={"projects": [PROJECT]}), \
-             patch.object(core, "run_cli", side_effect=[disk, {}, {}]) as cli:
+             patch.object(core, "run_cli", side_effect=[disk, {}, {"id": "operation-delete"}, {"status": {}}]) as cli:
             self.assertTrue(core.delete_saved_disk(plan["disk_id"], True)["deleted"])
-            self.assertEqual(cli.call_args.args[0][:4], ["compute", "disk", "delete", plan["disk_id"]])
+            self.assertIn(["compute", "disk", "delete", plan["disk_id"], "--async", "--format", "json"], [c.args[0] for c in cli.call_args_list])
         self.assertFalse(core._reusable_disks())
 
     def test_cleanup_never_deletes_attached_reconciling_protected_or_wrongly_owned_disk(self):
@@ -520,12 +525,12 @@ class ComputeTests(unittest.TestCase):
         instance = {"spec": {"boot_disk": {"existing_disk": {"id": plan["disk_id"]}}}}
         disk["status"]["read_write_attachment"] = "computeinstance-other"
         with patch.object(core, "_refresh_vm"), patch.object(core, "_accessible_vm", return_value=(instance, vm)), \
-             patch.object(core, "run_cli", side_effect=[{}, disk]) as cli:
+             patch.object(core, "run_cli", side_effect=[{"id": "operation-delete"}, {"status": {}}, disk]) as cli:
             with self.assertRaisesRegex(core.NebiusError, "not safe to delete"):
                 core.delete_vm(vm["id"], True)
         self.assertTrue(core._registered(vm["id"])["instance_deleted"])
         self.assertEqual([call.args[0][:3] for call in cli.call_args_list],
-                         [["compute", "instance", "delete"], ["compute", "disk", "get"]])
+                         [["compute", "instance", "delete"], ["compute", "instance", "operation"], ["compute", "disk", "get"]])
 
     def test_delete_vm_deletes_only_confirmed_boot_disk_after_live_checks(self):
         plan, disk = self.rejected_launch()
@@ -535,12 +540,12 @@ class ComputeTests(unittest.TestCase):
         instance = {"spec": {"boot_disk": {"existing_disk": {"id": plan["disk_id"]}},
                              "secondary_disks": [{"existing_disk": {"id": "computedisk-preserved"}}]}}
         with patch.object(core, "_refresh_vm"), patch.object(core, "_accessible_vm", return_value=(instance, vm)), \
-             patch.object(core, "run_cli", side_effect=[{}, disk, {}, {}]) as cli, \
+             patch.object(core, "run_cli", side_effect=[{"id": "operation-vm"}, {"status": {}}, disk, {}, {"id": "operation-disk"}, {"status": {}}]) as cli, \
              patch.object(core, "HOME", core.STATE_DIR), patch.object(core.subprocess, "run"):
             result = core.delete_vm(vm["id"], True)
         self.assertTrue(result["disk_deleted"])
         self.assertFalse(core._registry()["vms"])
-        self.assertEqual(cli.call_args.args[0][:4], ["compute", "disk", "delete", plan["disk_id"]])
+        self.assertIn(["compute", "disk", "delete", plan["disk_id"], "--async", "--format", "json"], [c.args[0] for c in cli.call_args_list])
         self.assertNotIn("computedisk-preserved", str(cli.call_args_list))
 
 

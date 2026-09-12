@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
-"""Nebius: capacity, GPU launch, VM overview and SSH in one keyboard interface.
+"""Nebius: GPU capacity, VM management, SSH and local port forwarding.
 
-THESIS: keep the resource and the next action visible from GPU choice to SSH.
-OWN-WORLD: Nebius lime selected rows, blue ink, Omarchy's terminal font and ground.
-STORY: choose GPU and allocation; name/place; review; follow progress; connect.
-FIRST VIEWPORT: title and scope, searchable resource list, selection details,
-and a persistent keyboard footer. No fixed-width content or floating overlays.
-FORM: existing Omarchy terminal conventions, explicitly requested by the user.
+Use arrows or j/k to move, Enter to select, / to search, and Esc to go back.
+Billable and destructive operations require a configuration review and confirmation.
 """
 
 from __future__ import annotations
@@ -29,6 +25,9 @@ import unicodedata
 from typing import Any
 
 import nebius_core as core
+import nebius_jobs as jobs
+import nebius_ports as ports
+import nebius_ssh as ssh_client
 
 
 class Back(Exception):
@@ -74,10 +73,39 @@ def allocation_label(value: str) -> str:
     return "Preemptible" if value == "preemptible" else "On-demand"
 
 
+def menu_shortcuts(rows, actions):
+    """Stable action letters; numbered shortcuts for resource choices."""
+    preferred = {"connect": "c", "stop": "s", "start": "t", "delete": "d", "ports": "p",
+                 "settings": "e", "storage": "o", "details": "i", "add": "n", "open": "o",
+                 "copy": "c", "pause": "p", "resume": "r", "remove": "d", "name": "n",
+                 "allocation": "p", "project": "l", "review": "r", "reuse": "u",
+                 "repair": "f", "recover": "r", "archive": "a", "__new": "n",
+                 "overview": "v", "get": "g", "capacity": "c", "activity": "a", "account": "s"}
+    used = {k.lower() for k in actions} | {"j", "k", "q"}
+    result = {}
+    for index, row in enumerate(rows):
+        explicit = next((key for key, value in actions.items() if not callable(value) and value == row[2]), None)
+        if explicit:
+            result[index] = explicit
+            continue
+        wanted = preferred.get(row[2]) if isinstance(row[2], str) else None
+        candidates = ([wanted] if wanted else []) + list("1234567890")
+        key = next((key for key in candidates if key not in used), None)
+        if key:
+            result[index] = key
+            used.add(key)
+    return result
+
+
+def key_label(key):
+    return "Shift+" + key if key.isupper() else key.upper()
+
+
 class App:
-    def __init__(self, screen, entry="overview"):
+    def __init__(self, screen, entry="overview", vm_id=None, username=None):
         self.screen = screen
         self.entry = entry
+        self.entry_vm = {"id": vm_id, "name": vm_id, "ssh_user": username}
         self.capacity: dict[str, Any] = {}
         self.inventory: dict[str, Any] = {}
         self.allocation = "on_demand"
@@ -219,8 +247,25 @@ class App:
         scroll = 0
         actions = actions or {}
         notes = notes or []
+        allocation = actions.get("p") in ("__allocation", "allocation", "toggle")
+        load_rows = rows if callable(rows) else None
+        if load_rows:
+            rows = load_rows()
+        refreshed_at = time.monotonic()
+        filtered = []
         while True:
+            previous_id = None
+            if load_rows and not searching and time.monotonic() - refreshed_at >= 2:
+                if filtered and selected < len(filtered):
+                    value = filtered[selected][2]
+                    previous_id = value.get("id") if isinstance(value, dict) else value
+                rows = load_rows()
+                refreshed_at = time.monotonic()
             filtered = [row for row in rows if query.casefold() in f"{row[0]} {row[1]}".casefold()]
+            if previous_id is not None:
+                selected = next((i for i, row in enumerate(filtered)
+                                 if (row[2].get("id") if isinstance(row[2], dict) else row[2]) == previous_id), selected)
+            shortcuts = menu_shortcuts(filtered, actions)
             selected = min(max(0, selected), max(0, len(filtered) - 1))
             hints = footer or "↑↓ / j k move   Enter select   / search   Esc back"
             if "?" not in hints:
@@ -228,20 +273,41 @@ class App:
             escape_hint = next((part for part in re.split(r"\s{2,}", hints) if part.startswith("Esc ")), "Esc back")
             enter_hint = next((part for part in re.split(r"\s{2,}", hints) if part.startswith("Enter ")), "Enter select")
             compact = "↑↓ / j k move   " + enter_hint + "   " + escape_hint
-            context_keys = (["P switch"] if "p" in actions else []) + (["G GPU"] if "g" in actions and title != "GPU manager" else [])
-            context_keys += (["M actions"] if "m" in actions else []) + (["R refresh"] if "r" in actions else []) + ["/ search", "? help"]
+            # Derive hints from this screen's real bindings, not just the letter P.
+            named_hints = {part.split(" ", 1)[0].lower(): part.split(" ", 1)[1]
+                           for part in re.split(r"\s{2,}", hints) if " " in part}
+            context_keys = []
+            row_keys = set(shortcuts.values())
+            for key in actions:
+                if key in row_keys:
+                    continue  # Printed beside the choice itself.
+                label = "switch" if key == "p" and allocation else named_hints.get(key.lower(),
+                    {"p": "ports", "a": "activity", "r": "refresh", "m": "actions", "g": "GPU"}.get(key, "select"))
+                context_keys.append(key_label(key) + " " + label)
+            row_hints = {"connect": "SSH", "stop": "stop", "start": "start", "delete": "delete",
+                         "ports": "ports", "settings": "username", "storage": "disks", "details": "details",
+                         "add": "add port", "open": "browser", "copy": "copy", "pause": "pause", "resume": "retry",
+                         "remove": "remove", "name": "name", "allocation": "switch", "project": "project",
+                         "review": "review", "get": "GPU", "overview": "VMs", "capacity": "capacity",
+                         "activity": "activity", "account": "account", "jump": "jump", "__new": "new project"}
+            for index, key in shortcuts.items():
+                if not key.isdigit():
+                    value = filtered[index][2]
+                    label = row_hints.get(value, re.sub(r"^\[[^]]+\]\s*", "", filtered[index][0])) if isinstance(value, str) else "select"
+                    context_keys.append(key_label(key) + " " + label)
+            context_keys += ["/ search", "? help"]
             compact += "\n" + "   ".join(context_keys)
-            bottom = self.frame(title, subtitle, compact, allocation=self.allocation if "p" in actions else None)
+            bottom = self.frame(title, subtitle, compact, allocation=self.allocation if allocation else None)
             height, width = self.screen.getmaxyx()
-            y = 7 if "p" in actions else 6
+            y = 7 if allocation else 6
             note_lines = [line for note in notes for line in self.wrap(note, width - 8)]
-            note_slots = max(0, min(3, bottom - y - 7))
+            note_slots = max(1 if notes else 0, min(3, bottom - y - 7))
             clipped_notes = len(note_lines) > note_slots
             for line in note_lines[:max(0, note_slots - (1 if clipped_notes else 0))]:
                 self.put(y, 4, line)
                 y += 1
             if clipped_notes:
-                self.put(y, 4, "[I] Read full summary", self.accent)
+                self.put(y, 4, "[F2] Read full summary", self.accent)
                 y += 1
             if notes:
                 y += 1
@@ -278,7 +344,9 @@ class App:
                 scroll = 0
             for offset, (kind, text, index) in enumerate(content[scroll:scroll + room]):
                 if kind == "label":
-                    label = ("› " if index == selected else "  ") + fit(text, width - 7)
+                    text = re.sub(r"^\[[^]]+\]\s*", "", text)
+                    shortcut = " [" + key_label(shortcuts[index]) + "]" if index in shortcuts else ""
+                    label = ("› " if index == selected else "  ") + fit(text, width - 7 - len(shortcut)) + shortcut
                     attr = curses.A_BOLD
                     if index == selected:
                         label += " " * max(0, width - 5 - cell_width(label))
@@ -321,9 +389,10 @@ class App:
                 current = filtered[selected] if filtered else None
                 text = ((str(current[0]) + "\n\n" + str(current[1]) + "\n\n") if current else "")
                 text += "Keyboard\n" + "\n".join("  " + hint for hint in self.key_hints(hints))
+                text += "\n" + "\n".join("  [" + key_label(key) + "] " + filtered[index][0] for index, key in shortcuts.items())
                 text += "\n  [PgUp/PgDn] page\n  [Home/End] first / last\n  Search: [Ctrl+U] clear, [Enter] finish"
                 self.message("Menu help", text)
-            elif key in ("i", "I") and clipped_notes:
+            elif key == curses.KEY_F2 and clipped_notes:
                 self.message(title + " / summary", "\n\n".join(notes))
             elif isinstance(key, str) and key in actions:
                 action = actions[key]
@@ -349,6 +418,10 @@ class App:
                 if callable(action) and not filtered:
                     continue
                 return action(filtered[selected][2]) if callable(action) else action
+            elif isinstance(key, str):
+                index = next((index for index, shortcut in shortcuts.items() if key == shortcut or key.lower() == shortcut), None)
+                if index is not None:
+                    return filtered[index][2]
 
     def edit(self, title, initial, *, notes=None, validate=None):
         value = initial
@@ -426,30 +499,37 @@ class App:
         self.message("Could not finish", explanation["message"] + "\n\n" + explanation["recovery"],
                      details=explanation["details"], error=True)
 
-    def confirm_launch(self, notes, details, *, action="create VM and start billing", title="Review VM"):
+    def confirm_launch(self, notes, details, *, action="create VM and start billing", title="Review VM", confirm_key=None):
         """Every billing term must be displayed before Enter can submit."""
         offset = 0
         while True:
-            bottom = self.frame(title, "Review every page before confirming",
-                                "Enter next page / confirm at end   D details   ↑↓ scroll   Esc back")
+            footer = (f"{confirm_key.upper()} {action} at end   Enter next page   I details   ↑↓ scroll   Esc cancel"
+                      if confirm_key else "Enter next page / confirm at end   D details   ↑↓ scroll   Esc back")
+            bottom = self.frame(title, "Review before confirming", footer)
             lines = self.wrap("\n\n".join(notes))
             slots = max(1, bottom - 8)
             offset = min(offset, max(0, len(lines) - slots))
             for y, line in enumerate(lines[offset:offset + slots], 5):
                 self.put(y, 2, line)
             at_end = offset + slots >= len(lines)
-            self.put(bottom - 2, 2, "Enter: " + action if at_end else "Enter: read next page", self.accent | curses.A_BOLD)
+            self.put(bottom - 2, 2, ((confirm_key.upper() if confirm_key else "Enter") + ": " + action)
+                     if at_end else "Enter: read next page", self.accent | curses.A_BOLD)
             self.put(bottom - 1, 2, f"Lines {offset + 1}–{min(len(lines), offset + slots)} of {len(lines)}")
             self.screen.refresh()
             key = self.key()
             if key in ("\x1b", "q"):
                 return False
-            if key in ("\n", "\r", curses.KEY_ENTER):
+            if confirm_key and isinstance(key, str) and key.lower() == confirm_key:
                 if at_end:
                     return True
-                offset += slots
-            elif key in ("d", "D"):
-                self.message("Launch details", details)
+                continue
+            if key in ("\n", "\r", curses.KEY_ENTER):
+                if at_end and not confirm_key:
+                    return True
+                if not at_end:
+                    offset += slots
+            elif key in (("i", "I") if confirm_key else ("d", "D")):
+                self.message(title + " / details", details)
             elif key in ("j", curses.KEY_DOWN):
                 offset += 1
             elif key in ("k", curses.KEY_UP):
@@ -461,10 +541,10 @@ class App:
 
     def progress(self, title, started, *, mutation=False):
         elapsed = int(time.time() - started)
-        operation = core._read_json(core.OPERATION_FILE, {}) if mutation else {}
+        operation = core._read_json(getattr(self, "watched_operation", core.OPERATION_FILE), {}) if mutation else {}
         spinner = "|/-\\"[elapsed % 4]
         bottom = self.frame(title, f"{spinner}  {elapsed // 60}:{elapsed % 60:02d} elapsed",
-                            "B continue in background   This operation survives closing the window" if mutation else "Esc cancel this read")
+                            "Esc/B background (work continues)" if mutation else "Esc cancel this read")
         y = 7
         for line in self.wrap(operation.get("message") or title):
             self.put(y, 3, line, self.accent | curses.A_BOLD)
@@ -472,7 +552,7 @@ class App:
         if mutation:
             stages = {"checking": 0, "project": 1, "network": 2, "disk": 1, "instance": 2, "boot": 3, "done": 4}
             current = stages.get(operation.get("stage"), 0)
-            labels = ["Check request", "Create boot disk", "Create VM", "Wait for address", "Ready to connect"]
+            labels = ["Check request", "Create boot disk", "Create VM", "Wait for address", "VM running"]
             if operation.get("stage") in {"project", "network"}:
                 labels = ["Check request", "Create project", "Wait for network", "Project ready"]
             if operation.get("stage") in {"start", "stop", "delete"}:
@@ -506,23 +586,17 @@ class App:
             return json.load(output)
 
     def active_job(self):
-        job = core._read_json(core.STATE_DIR / "active-job.json", {})
-        if job.get("phase") != "running":
-            return None
-        try:
-            os.kill(int(job["pid"]), 0)
-        except (OSError, KeyError, ValueError):
-            return None
-        return job
+        return next((job for job in jobs.jobs() if job.get("phase") in {"running", "queued"}), None)
 
     def watch(self, job_id, title, started=None):
         started = started or time.time()
         path = core.STATE_DIR / "jobs" / f"{job_id}.json"
+        self.watched_operation = path.with_name(job_id + ".operation.json")
         while True:
             job = core._read_json(path, {})
             if job.get("phase") in {"ready", "error"}:
                 if job["phase"] == "error":
-                    operation = core._read_json(core.OPERATION_FILE, {}) if job.get("started_at") else {}
+                    operation = core._read_json(self.watched_operation, {}) if job.get("started_at") else {}
                     self.message("Operation stopped", operation.get("message", job.get("error", "")) + "\n\n" + operation.get("recovery", ""),
                                  details=job.get("error", ""), error=True)
                     raise Back()
@@ -535,18 +609,15 @@ class App:
             elif time.time() - started > 10:
                 raise core.NebiusError("The operation worker could not start. No cloud request was confirmed.")
             self.progress(title, started, mutation=True)
-            if self.key() in ("b", "B"):
+            if self.key() in ("b", "B", "\x1b", 27):
                 self.notice = "Operation continues. Press A to follow progress."
                 raise Background()
 
     def mutate(self, title, *arguments):
-        if self.active_job():
-            raise core.NebiusError("Another operation is running. Press A in the overview to follow it.")
-        job_id = secrets.token_hex(12)
-        core.STATE_DIR.mkdir(parents=True, exist_ok=True)
-        with (core.STATE_DIR / "worker.log").open("a") as log:
-            subprocess.Popen([sys.executable, str(Path(__file__).with_name("nebius_job.py")), job_id, *arguments],
-                             stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+        job_id = jobs.submit(arguments, title)["job_id"]
+        if arguments[0] in {"start", "stop", "delete", "delete-disk"}:
+            self.notice = title + " submitted. A opens Activity; other VMs remain available."
+            raise Background()
         return self.watch(job_id, title)
 
     def load_capacity(self, refresh=False):
@@ -704,6 +775,7 @@ class App:
                         f"  Estimate:   {price}",
                         "No automatic stop is scheduled. Stop the VM manually when finished. Disks remain billable until deleted.",
                     ]
+                    notes.append("Network: static public IP; inbound SSH (TCP 22) only. Use Ports for local application access.")
                     if plan.get("reusable_disk"):
                         notes.insert(1, f"Boot disk\n  Reuse boot disk: {plan['reusable_disk']['name']}\n  No new disk will be created.")
                     if self.allocation == "preemptible":
@@ -742,30 +814,231 @@ class App:
         if not vm.get("ssh_user"):
             username = self.edit("SSH username", username,
                                  notes=["This VM already exists. Use its login user; SSH will use your configured keys or agent."])
-        connection = self.read("Preparing SSH", "connect", "--vm-id", vm["id"], "--no-launch", "--username", username)
-        curses.def_prog_mode()
-        curses.endwin()
-        try:
-            print(f"\nConnecting to {vm['name']}… Exit SSH to return to Nebius.\n", flush=True)
-            result = subprocess.run(connection["command"], check=False)
-        finally:
-            curses.reset_prog_mode()
-            self.screen.clear()
-            self.screen.refresh()
-        if result.returncode:
-            self.message("SSH ended", f"SSH exited with status {result.returncode}.\n\nCheck the username, SSH key and network access. The VM is unchanged.")
+        while True:
+            try:
+                connection = self.read("Preparing SSH", "connect", "--vm-id", vm["id"], "--no-launch", "--username", username)
+                vm["name"] = connection.get("name") or vm["name"]
+                def progress(message, elapsed):
+                    bottom = self.frame("Connecting to " + vm["name"], f"Checking SSH login · {elapsed}s / 120s", "Esc back (VM stays running)")
+                    for y, line in enumerate(self.wrap(message), 6):
+                        if y < bottom:
+                            self.put(y, 3, line)
+                    self.screen.refresh()
+                ssh_client.wait_ready(connection, progress=progress, cancelled=lambda: self.key() in ("\x1b", 27))
+                curses.def_prog_mode()
+                curses.endwin()
+                started = time.monotonic()
+                try:
+                    print(f"\nConnecting to {vm['name']}… Exit SSH to return to Nebius.\n", flush=True)
+                    with tempfile.TemporaryFile(mode="w+") as errors:
+                        result = subprocess.run(connection["command"], check=False, stderr=errors)
+                        errors.seek(0)
+                        detail = errors.read()[-4000:].strip()
+                finally:
+                    curses.reset_prog_mode()
+                    self.screen.clear()
+                    self.screen.refresh()
+                if result.returncode == 0 and time.monotonic() - started >= 3:
+                    return
+                issue = (f"SSH exited with status {result.returncode}." if result.returncode else "The SSH session closed immediately.")
+                issue += "\n" + (detail or "No diagnostic was returned by SSH.")
+            except ssh_client.SSHCancelled:
+                raise Back()
+            except (ssh_client.SSHError, core.NebiusError, OSError) as error:
+                issue = str(error)
+            core._atomic_json(core.STATE_DIR / "ssh-last-error.json", {"vm_id": vm["id"], "name": vm["name"], "error": issue})
+            choice = self.menu("SSH did not connect", [("Retry connection", "Check login readiness and try again", "resume"),
+                                ("SSH username", username, "settings"), ("Back to VMs", "The VM is unchanged", "overview")],
+                               subtitle=vm["name"], notes=[issue])
+            if choice == "overview":
+                return
+            if choice == "settings":
+                username = self.edit("SSH username", username)
 
     def activity(self):
-        active = self.active_job()
-        if active:
-            started = dt.datetime.fromisoformat(active["started_at"]).timestamp()
-            self.watch(active["id"], "Active operation", started)
-        operation = core._read_json(core.OPERATION_FILE, {})
-        summary = core.explain_error(operation.get("message", ""))["message"] if operation.get("phase") == "error" else operation.get("message", "No operations yet")
-        self.message("Last operation", summary + "\n\n" + operation.get("recovery", ""),
-                     details=operation.get("details") or json.dumps(operation, indent=2), error=operation.get("phase") == "error")
+        def rows():
+            entries = sorted(jobs.jobs(), key=lambda job: job.get("phase") not in {"running", "queued"})
+            result = []
+            for job in entries:
+                view = jobs.describe(job)
+                result.append((view["title"] + " · " + view["status"], view["message"], job, view["section"]))
+            return result
+        while True:
+            if not jobs.jobs():
+                self.message("Activity", "No operations yet.")
+                return
+            selected = self.menu("Activity", rows, subtitle="Updates every 2s · saved results",
+                                 actions={"r": "refresh"}, footer="↑↓ / j k move   Enter details   R refresh   Esc back")
+            if selected == "refresh":
+                continue
+            if selected["phase"] in {"running", "queued"}:
+                self.watch(selected["id"], jobs.describe(selected)["title"])
+            else:
+                operation = selected.get("operation", {})
+                view = jobs.describe(selected)
+                if jobs.can_resume(selected):
+                    try:
+                        action = self.menu(view["title"], [("Details", view["message"], "details"),
+                             ("Resume operation", "Reconcile the saved cloud request and finish remaining steps", "resume")], subtitle=view["status"])
+                    except Back:
+                        continue
+                    if action == "resume":
+                        jobs.submit(selected["arguments"], view["title"])
+                        continue
+                text = view["status"] + "\n" + view["message"]
+                if operation.get("recovery"):
+                    text += "\n\n" + operation["recovery"]
+                if selected.get("finished_at"):
+                    text += "\n\nFinished: " + selected["finished_at"]
+                self.message(view["title"], text, details=json.dumps(selected, indent=2), error=selected["phase"] != "ready")
 
-    def vm_actions(self, vm):
+    def port_form(self, vm, remote_port=8000, local_port=None, *, error=""):
+        """One form and one submission for the two ends of an SSH tunnel."""
+        values = [str(remote_port), str(local_port if local_port is not None else remote_port if int(remote_port) >= 1024 else int(remote_port) + 8000)]
+        cursors = [len(value) for value in values]
+        active, local_edited, replace = 0, local_port is not None, True
+        issue = error
+        try:
+            "──SSH──▶".encode(sys.stdout.encoding or "utf-8")
+            arrow = " ──SSH──▶ "
+        except UnicodeEncodeError:
+            arrow = " --SSH--> "
+        while True:
+            height, width = self.screen.getmaxyx()
+            if height < 20 or width < 44:
+                self.frame("Add SSH port", "Enlarge this terminal to at least 44×20", "Esc cancel")
+                self.screen.refresh()
+                if self.key() in ("\x1b", 27):
+                    raise Back()
+                continue
+            bottom = self.frame("Add SSH port", vm["name"], "Tab/↑↓ fields   ←→ cursor   Enter save   Esc cancel\nCtrl+U clear field")
+            for index, label in enumerate(("Remote port · VM", "Local port · this PC")):
+                y = 6 + index * 2
+                self.put(y, 2, ("› " if index == active else "  ") + label, curses.A_BOLD)
+                field = values[index]
+                if index == active:
+                    field = field[:cursors[index]] + "▏" + field[cursors[index]:]
+                self.put(y, 26, "[ " + field.ljust(6) + " ]", self.selection if index == active else 0)
+            self.put(10, 2, "This computer", self.accent)
+            self.put(10, 27, "VM app", self.accent)
+            self.put(11, 2, ("127.0.0.1:" + (values[1] or "?")).ljust(15) + arrow + "127.0.0.1:" + (values[0] or "?"))
+            note = issue or "Local access only. SSH carries traffic to the app on your VM."
+            for y, line in enumerate(self.wrap(note, width - 6), 13):
+                if y <= bottom:
+                    self.put(y, 2, line, self.error if issue else 0)
+            self.screen.refresh()
+            key = self.key()
+            if key in ("\x1b", 27):
+                raise Back()
+            if key in ("\t", curses.KEY_DOWN, curses.KEY_UP, curses.KEY_BTAB):
+                active = 1 - active
+                replace = True
+                continue
+            if key in ("\n", "\r", curses.KEY_ENTER):
+                for index, validate in enumerate((ports.port, ports.validate_local_port)):
+                    try:
+                        validate(values[index])
+                    except core.NebiusError as failure:
+                        active, replace = index, True
+                        issue = ("Remote port: " if index == 0 else "Local port: ") + str(failure)
+                        break
+                else:
+                    return int(values[0]), int(values[1])
+                continue
+            value, cursor = values[active], cursors[active]
+            changed = False
+            if key == "\x15":
+                value, cursor, changed = "", 0, True
+            elif key == curses.KEY_LEFT:
+                cursor, replace = max(0, cursor - 1), False
+            elif key == curses.KEY_RIGHT:
+                cursor, replace = min(len(value), cursor + 1), False
+            elif key in (curses.KEY_HOME, "\x01"):
+                cursor, replace = 0, False
+            elif key in (curses.KEY_END, "\x05"):
+                cursor, replace = len(value), False
+            elif key in (curses.KEY_BACKSPACE, "\x7f", "\b"):
+                if replace:
+                    value, cursor = "", 0
+                elif cursor:
+                    value, cursor = value[:cursor - 1] + value[cursor:], cursor - 1
+                changed = True
+            elif key == curses.KEY_DC:
+                value, changed = value[:cursor] + value[cursor + 1:], True
+            elif isinstance(key, str) and key in "0123456789":
+                if replace:
+                    value, cursor = "", 0
+                if len(value) < 5:
+                    value, cursor, changed = value[:cursor] + key + value[cursor:], cursor + 1, True
+            values[active], cursors[active] = value, cursor
+            if changed:
+                issue, replace = "", False
+                if active == 1:
+                    local_edited = True
+                elif not local_edited:
+                    port = int(value) if value else 0
+                    values[1] = str(port if port >= 1024 else port + 8000) if port else ""
+                    cursors[1] = len(values[1])
+
+    def ports(self, vm=None):
+        def rows():
+            saved = [m for m in ports.listing() if vm is None or m["vm_id"] == vm["id"]]
+            return [(f"127.0.0.1:{m['local_port']} → {m['vm_name']}:{m['remote_port']}", m["state"], m) for m in saved] + [
+                ("Add port", "Choose a remote application port to forward over SSH", "add")]
+        while True:
+            choice = self.menu("SSH port forwarding" + (" · " + vm["name"] if vm else ""), rows,
+                               subtitle="Updates every 2s · SSH tunnel status",
+                               notes=["Only this laptop can access these addresses. Enabled ports reconnect after login."],
+                               actions={"r": "refresh"}, footer="↑↓ / j k move   Enter actions   R refresh   Esc back")
+            if choice == "refresh":
+                continue
+            if choice == "add":
+                target = vm
+                if target is None:
+                    inventory = self.read("Loading VMs", "list")
+                    candidates = [v for v in inventory.get("vms", []) if not v.get("instance_deleted")]
+                    if not candidates:
+                        self.message("No VMs", "Create a VM before adding a port.")
+                        continue
+                    target = self.menu("Choose VM", [(v["name"], v["state"], v) for v in candidates])
+                remote, local, issue = 8000, None, ""
+                while True:
+                    try:
+                        remote, local = self.port_form(target, remote, local, error=issue)
+                        self.read("Saving SSH port forward", "ports", "--action", "add", "--vm-id", target["id"],
+                                  "--remote-port", str(remote), "--local-port", str(local))
+                        self.notice = f"Saved: 127.0.0.1:{local} → {target['name']}:{remote}"
+                        break
+                    except Back:
+                        break
+                    except core.NebiusError as failure:
+                        issue = str(failure)
+            else:
+                actions = [("Open in browser", choice["url"], "open"), ("Copy address", f"127.0.0.1:{choice['local_port']}", "copy"),
+                           ("Details", choice.get("detail", ""), "details")]
+                if not choice.get("deleted"):
+                    actions.append(("Pause" if choice["enabled"] else "Resume", "Keep this saved mapping", "pause" if choice["enabled"] else "resume"))
+                actions.append(("Remove port", "Stop forwarding and forget this mapping", "remove"))
+                action = self.menu("Port actions", actions, subtitle=choice["state"])
+                if action == "open":
+                    try:
+                        subprocess.Popen(["xdg-open", choice["url"]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    except OSError as error:
+                        raise core.NebiusError("Could not open browser: " + str(error)) from error
+                elif action == "copy":
+                    try:
+                        result = subprocess.run(["wl-copy"], input=f"127.0.0.1:{choice['local_port']}", text=True, capture_output=True)
+                    except OSError as error:
+                        raise core.NebiusError("Could not copy address: " + str(error)) from error
+                    if result.returncode:
+                        raise core.NebiusError("Could not copy address: " + result.stderr)
+                    self.notice = "Address copied"
+                elif action == "details":
+                    self.message("Port details", choice.get("detail", "Tunnel status only; application readiness is not checked."), details=json.dumps(choice, indent=2))
+                else:
+                    ports.change(choice["id"], action)
+
+    def vm_actions(self, vm, action=None):
         if vm.get("recovery_id"):
             request = next((item for item in self.inventory.get("recovery", []) if item["plan_id"] == vm["recovery_id"]), None)
             if not request:
@@ -778,6 +1051,7 @@ class App:
         elif vm["state"] == "stopped":
             rows += [("Start VM", "Resume billing and wait for its address", "start")]
         if not vm.get("instance_deleted"):
+            rows += [("SSH port forwarding", "Open remote apps at localhost; manage saved ports", "ports")]
             rows += [("Connection settings", "Edit the saved SSH username", "settings")]
         rows = [(*row, "VM actions") for row in rows]
         if not vm.get("instance_deleted"):
@@ -786,10 +1060,16 @@ class App:
         if vm.get("can_delete"):
             rows += [("Delete remaining boot disk" if vm.get("instance_deleted") else "Delete VM and boot disk",
                       "Permanent deletion; disk charges continue until removed", "delete", "Delete")]
-        action = self.menu(vm["name"], rows, subtitle=f"{vm['state']} · {vm['region']} · {allocation_label(vm['allocation'])}",
-                           notes=[vm["project_name"]])
+        if action is None:
+            action = self.menu(vm["name"], rows, subtitle=f"{vm['state']} · {vm['region']} · {allocation_label(vm['allocation'])}",
+                               notes=[vm["project_name"]])
+        elif action not in {row[2] for row in rows}:
+            self.message("Action unavailable", "This action is not available for " + vm["name"] + " in its current state.")
+            return
         if action == "connect":
             self.ssh(vm)
+        elif action == "ports":
+            self.ports(vm)
         elif action == "details":
             self.message("VM details", json.dumps(vm, indent=2))
         elif action == "storage":
@@ -807,18 +1087,16 @@ class App:
             vm["ssh_user"] = username
         else:
             label = {"start": "Start VM", "stop": "Stop VM", "delete": "Delete VM and boot disk"}[action]
-            choice = self.menu(label, [(label, vm["name"], True), ("Cancel", "No changes", False)],
-                               selected=1, subtitle=vm["name"], notes=["Deletion is permanent. The VM and its boot disk are removed; secondary disks are kept." if action == "delete" else "Starting incurs compute charges. Stopping leaves disks billable."])
-            if choice:
-                if action == "delete" and not self.confirm_launch([
-                    "Permanently delete " + vm["name"],
-                    "Project: " + vm["project_name"], "VM: " + vm["id"],
-                    "Boot disk: " + str(vm.get("disk_id") or "not recorded"),
-                    "All data on this boot disk will be lost. Secondary disks are kept and remain billable.",
-                ], json.dumps(vm, indent=2), title="Review deletion", action="permanently delete VM and boot disk"):
-                    return
-                self.mutate(label, action, "--vm-id", vm["id"], *(["--confirmed"] if action == "delete" else []))
-                self.inventory = self.read("Refreshing VMs", "list", "--refresh")
+            notes = [vm["name"] + "\nProject: " + vm["project_name"] + " · " + vm["region"]]
+            if action == "delete":
+                notes += ["VM: " + vm["id"] + "\nBoot disk: " + str(vm.get("disk_id") or "not recorded"),
+                          "Permanently deletes the VM and boot disk, including all boot-disk data. Cannot be undone. Secondary disks are kept and remain billable."]
+            else:
+                notes += ["Starting resumes compute charges." if action == "start" else "Stops compute charges. Disks remain saved and billable."]
+            if self.confirm_launch(notes, json.dumps(vm, indent=2), title=label,
+                                   action="delete permanently" if action == "delete" else label.lower(),
+                                   confirm_key={"delete": "d", "start": "t", "stop": "s"}[action]):
+                self.mutate(label + " · " + vm["name"], action, "--vm-id", vm["id"], *(["--confirmed"] if action == "delete" else []))
 
     def recovery_actions(self, request):
         choice = self.menu("Interrupted launch", [
@@ -859,16 +1137,16 @@ class App:
             self.message("Reuse boot disk", f"Get a GPU and choose {disk['project']['project_name']} in {disk['project']['region']}. "
                          "The review will offer this compatible disk instead of allocating another.")
         else:
-            approved = self.menu("Delete boot disk", [("Delete permanently", disk["name"], True), ("Cancel", "Keep the disk", False)], selected=1)
-            if approved and self.confirm_launch([
-                "Permanently delete " + disk["name"], "Project: " + disk["project"]["project_name"],
+            if self.confirm_launch([
+                "Permanently delete " + disk["name"] + "\nProject: " + disk["project"]["project_name"],
                 "Disk: " + disk["disk_id"], f"{disk['disk_gib']} GiB. All data will be lost. This cannot be undone.",
                 "Deletion is refused if the disk is attached, protected, or no longer verified as this plugin's saved disk.",
-            ], json.dumps(disk, indent=2), title="Review disk deletion", action="permanently delete boot disk"):
+            ], json.dumps(disk, indent=2), title="Delete boot disk", action="delete permanently", confirm_key="d"):
                 self.mutate("Deleting unused boot disk", "delete-disk", "--disk-id", disk["disk_id"], "--confirmed")
 
     def overview(self, jump=False):
         refresh = not self.inventory
+        selected_id, selected_index = None, 0
         while True:
             if refresh:
                 self.inventory = self.read("Discovering your VMs", "list", "--refresh")
@@ -890,11 +1168,22 @@ class App:
             if self.inventory.get("errors"):
                 notes += ["Some projects could not be read. R retries; D shows details."]
             try:
+                selected_index = next((index for index, row in enumerate(rows) if isinstance(row[2], dict)
+                                       and row[2].get("id") == selected_id), min(selected_index, len(rows) - 1)) if selected_id else selected_index
                 choice = self.menu("Jump into a VM" if jump else "Your VMs", rows,
                     subtitle=f"{len(vms)} {'running ' if jump else ''}VMs · {self.snapshot_note(self.inventory)}",
-                    notes=notes, actions={"g": "__get", "c": "__capacity", "r": "__refresh", "a": "__activity", "d": "__errors", "v": "__overview",
-                                          "m": lambda vm: {"manage": vm}},
-                    footer="↑↓ / j k move   " + ("Enter SSH" if jump else "Enter actions") + "   M actions   / search   G get GPU   R refresh   A activity   Esc home")
+                    notes=notes, selected=selected_index,
+                    actions={"p": lambda vm: {"vm_action": "ports", "vm": vm},
+                             "d": lambda vm: {"vm_action": "delete", "vm": vm},
+                             "s": lambda vm: {"vm_action": "stop", "vm": vm},
+                             "t": lambda vm: {"vm_action": "start", "vm": vm},
+                             "c": lambda vm: {"vm_action": "connect", "vm": vm},
+                             "a": "__activity", "r": "__refresh", "g": "__get", "i": "__errors", "m": lambda vm: {"manage": vm}},
+                    footer="↑↓ / j k move   " + ("Enter SSH" if jump else "Enter actions") + "   P ports   D delete   S stop   T start   C SSH   A activity   R refresh   G GPU   I info   M actions   Esc home")
+                target = choice.get("vm", choice.get("manage", choice)) if isinstance(choice, dict) else None
+                if isinstance(target, dict) and target.get("id"):
+                    selected_id = target["id"]
+                    selected_index = next((index for index, row in enumerate(rows) if row[2] == target), selected_index)
                 if choice == "__get":
                     self.capacity_flow(True)
                     refresh = True
@@ -930,6 +1219,20 @@ class App:
                             self.disk_actions(item["reusable_disk"])
                         elif isinstance(item, dict) and item.get("recovery"):
                             self.recovery_actions(item["recovery"])
+                    except Back:
+                        pass
+                    refresh = True
+                elif isinstance(choice, dict) and choice.get("vm_action"):
+                    item = choice["vm"]
+                    try:
+                        if isinstance(item, dict) and item.get("id"):
+                            self.vm_actions(item, action=choice["vm_action"])
+                        elif choice["vm_action"] == "ports":
+                            self.ports()
+                        elif isinstance(item, dict) and item.get("reusable_disk") and choice["vm_action"] == "delete":
+                            self.disk_actions(item["reusable_disk"])
+                        else:
+                            self.message("Choose a VM", "Highlight a VM to use this action.")
                     except Back:
                         pass
                     refresh = True
@@ -977,6 +1280,10 @@ class App:
                     self.overview(entry == "jump")
                 elif entry == "activity":
                     self.activity()
+                elif entry == "ports":
+                    self.ports()
+                elif entry == "connect":
+                    self.ssh(self.entry_vm)
                 elif entry == "account":
                     self.account()
             except Background:
@@ -996,10 +1303,11 @@ class App:
                     ("[Shift+J] Jump into a VM", "Connect to a running machine over SSH", "jump", "Create & connect"),
                     ("[V] Your VMs", "View machines, connection settings and actions", "overview", "Manage"),
                     ("[C] GPU capacity", "Compare on-demand and preemptible availability", "capacity", "Manage"),
-                    ("[A] Last operation", "Follow progress or inspect a result or error", "activity", "Manage"),
+                    ("[P] SSH port forwarding", "Open remote apps locally; add, pause or remove ports", "ports", "Manage"),
+                    ("[A] Activity", "Follow concurrent operations and inspect results", "activity", "Manage"),
                     ("[S] Account / reconnect", "Connect your Nebius account and tools", "account", "Account"),
                 ], subtitle="Your projects · keyboard first", notes=[note] if note else [],
-                    actions={"g": "get", "J": "jump", "v": "overview", "c": "capacity", "a": "activity", "s": "account"},
+                    actions={"g": "get", "J": "jump", "v": "overview", "c": "capacity", "a": "activity", "s": "account", "p": "ports"},
                     footer="↑↓ / j k move   Enter select   G get GPU   Shift+J jump   V VMs   C capacity   Esc quit")
             except Back:
                 return
@@ -1007,12 +1315,16 @@ class App:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("screen", nargs="?", default="home", choices=("home", "get", "capacity", "overview", "jump", "activity"))
+    parser.add_argument("screen", nargs="?", default="home", choices=("home", "get", "capacity", "overview", "jump", "activity", "ports", "connect"))
+    parser.add_argument("--vm-id")
+    parser.add_argument("--username")
     args = parser.parse_args()
+    if args.screen == "connect" and not args.vm_id:
+        parser.error("connect requires --vm-id")
     locale.setlocale(locale.LC_ALL, "")
     os.environ.setdefault("ESCDELAY", "25")
     try:
-        curses.wrapper(lambda screen: App(screen, args.screen).run())
+        curses.wrapper(lambda screen: App(screen, args.screen, args.vm_id, args.username).run())
     except KeyboardInterrupt:
         pass
     return 0

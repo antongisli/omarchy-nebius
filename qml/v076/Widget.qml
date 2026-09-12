@@ -49,14 +49,16 @@ Panel {
   readonly property var actions: ready ? [
     { key: "G", title: "Get a GPU VM", screen: "get" },
     { key: "J", title: "Jump into a VM", screen: "jump" },
+    { key: "P", title: "SSH port forwarding", screen: "ports" },
     { key: "V", title: "Your VMs", screen: "overview" },
     { key: "C", title: "GPU capacity", screen: "capacity" },
-    { key: "A", title: busy ? "Follow progress" : "Last operation", screen: "activity" },
+    { key: "A", title: "Activity", screen: "activity" },
     { key: "S", title: "Account / reconnect", screen: "setup" },
     { key: "U", title: "Uninstall Nebius plugin", screen: "uninstall" }
   ] : [
     { key: "S", title: needsReconnect ? "Reconnect account" : "Set up Nebius", screen: "setup" },
-    { key: "A", title: "Last operation", screen: "activity" },
+    { key: "P", title: "SSH port forwarding", screen: "ports" },
+    { key: "A", title: "Activity", screen: "activity" },
     { key: "U", title: "Uninstall Nebius plugin", screen: "uninstall" }
   ]
 
@@ -167,6 +169,8 @@ Panel {
     function jump(): string { root.launch("jump"); return "ok" }
     function vms(): string { root.launch("overview"); return "ok" }
     function capacity(): string { root.launch("capacity"); return "ok" }
+    function ports(): string { root.launch("ports"); return "ok" }
+    function activity(): string { root.launch("activity"); return "ok" }
     function uninstall(): string { root.launch("uninstall"); return "ok" }
   }
   BarIconButton {

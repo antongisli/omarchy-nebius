@@ -22,20 +22,26 @@ def main():
         return 2
     job_path = core.STATE_DIR / "jobs" / f"{job_id}.json"
     core.STATE_DIR.mkdir(parents=True, exist_ok=True)
-    with (core.STATE_DIR / "ui-job.lock").open("a") as lock, contextlib.ExitStack() as ownership:
+    os.environ["NEBIUS_JOB_ID"] = job_id
+    with (core.STATE_DIR / ("job-" + job_id + ".lock")).open("a") as lock, contextlib.ExitStack() as ownership:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             core._atomic_json(job_path, {"phase": "error", "error": "Another operation is running. Open activity."})
             return 1
+        resource = "global"
+        if arguments[0] in {"start", "stop", "delete"} and "--vm-id" in arguments:
+            resource = arguments[arguments.index("--vm-id") + 1]
         try:
-            ownership.enter_context(core.mutation_guard())
+            ownership.enter_context(core.mutation_guard(resource=resource))
         except core.NebiusError as error:
-            core._atomic_json(job_path, {"phase": "error", "error": str(error)})
+            core._atomic_json(job_path, {**core._read_json(job_path, {}), "id": job_id,
+                                        "command": arguments[0], "arguments": arguments, "phase": "error", "error": str(error)})
             return 1
         job = {
+            **core._read_json(job_path, {}),
             "id": job_id, "pid": os.getpid(), "phase": "running", "command": arguments[0],
-            "started_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "started_at": dt.datetime.now(dt.timezone.utc).isoformat(), "arguments": arguments,
         }
         core._atomic_json(job_path, job)
         core._atomic_json(core.STATE_DIR / "active-job.json", job)
@@ -50,7 +56,7 @@ def main():
             errors.write(str(error))
         job["phase"] = "ready" if code == 0 else "error"
         job["finished_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
-        operation = core._read_json(core.OPERATION_FILE, {})
+        operation = core.current_operation()
         if code == 0:
             job["result"] = json.loads(output.getvalue() or "{}")
             if operation.get("phase") == "running":
@@ -68,10 +74,11 @@ def main():
                 recovery = f"Project {operation.get('project_name') or operation['project_id']} already exists. " + recovery
             core._write_operation("error", operation.get("stage", "request"), explanation["message"],
                                   details=job["error"], recovery=recovery, **details)
+        job["operation"] = core.current_operation()
         core._atomic_json(job_path, job)
         core._atomic_json(core.STATE_DIR / "active-job.json", job)
         with (core.STATE_DIR / "activity.log").open("a", encoding="utf-8") as log:
-            log.write(json.dumps({**job, "operation": core._read_json(core.OPERATION_FILE, {})}) + "\n")
+            log.write(json.dumps({**job, "operation": core.current_operation()}) + "\n")
         return code
 
 

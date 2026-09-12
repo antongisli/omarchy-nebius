@@ -9,4 +9,4 @@ The source files are preserved as supplied. The wordmark uses lime `#E0FF4F`; th
 
 Nebius names and marks belong to their respective owners and are not relicensed by this repository's MIT code license. This repository is maintained by Anton Smith.
 
-`preview.png` and documentation previews are rendered from the plugin's real QML and terminal drawing code with explicitly synthetic data. They contain no account or resource screenshots. See `tools/render_preview.py` and `tools/preview.qml` for the source.
+`preview.png` and the terminal screens in `docs/screenshots/` are rendered from the plugin's production terminal drawing code with explicitly synthetic data. The optional native launcher capture uses the real QML. They contain no account or resource screenshots. See `tools/capture-previews`, `tools/render_preview.py`, `tools/preview.qml` and `tools/terminal-capture.qml` for the source and reproducible offscreen capture workflow.

@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Window
 import Quickshell
-import "plugin/qml/v072" as Plugin
+import "plugin/qml/v076" as Plugin
 
 // Run only with QT_QPA_PLATFORM=offscreen. No cloud polling or desktop window.
 ShellRoot {
@@ -61,6 +61,8 @@ ShellRoot {
         var verticalIconHeight = widget.implicitHeight
         test.barStub.vertical = false
         widget.snapshot = {ready: true, setup_complete: true, operation: {}, account: {}, capacity: {offerings: []}}
+        test.require(widget.actions[2].key === "P" && widget.actions[2].title === "SSH port forwarding",
+          "SSH ports must be a prominent launcher action")
         widget.vmCount = {count: 0, state: "current", checked_at: now}
         test.require(widget.countLabel === "0", "Confirmed zero must display zero")
         test.require(widget.countVisible && widget.badgeLabel === "0", "Confirmed zero must be a visible badge")

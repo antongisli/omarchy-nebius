@@ -59,9 +59,9 @@ class NativeTerminalTests(unittest.TestCase):
                 self.assertIn("RESULT:two", output)
 
     def test_real_curses_delete_cancel_never_calls_mutation(self):
-        output = self.exercise("delete-cancel", b"\x1bOF\n\n", 48, 20)
+        output = self.exercise("delete-cancel", b"d\n\x1b", 48, 20)
         self.assertIn("RESULT:cancelled", output)
-        self.assertIn("Cancel", output)
+        self.assertIn("cancel", output)
 
     def test_real_curses_p_switches_capacity_without_selecting_a_gpu(self):
         for width, height in [(48, 20), (80, 24)]:
@@ -69,6 +69,19 @@ class NativeTerminalTests(unittest.TestCase):
             self.assertIn("RESULT:preemptible", output)
             self.assertIn("On-demand", output)
             self.assertIn("Preemptible", output)
+
+    def test_real_curses_escape_and_b_background_a_running_job(self):
+        for key in (b"\x1b", b"B"):
+            output = self.exercise("background", key, 48, 20)
+            self.assertIn("RESULT:background", output)
+            self.assertIn("Esc/B", output)
+
+    def test_real_curses_port_form_edits_both_fields_on_one_page(self):
+        for separator in (b"\t", b"\x1bOB"):
+            output = self.exercise("port-form", b"8188" + separator + b"18188\n", 48, 20, ready_marker=b"Local port")
+            self.assertIn("RESULT:8188:18188", output)
+            self.assertIn("Remote port", output)
+            self.assertIn("This computer", output)
 
 
 def scene(name):
@@ -90,6 +103,16 @@ def scene(name):
                 }]}
                 app.capacity_flow()
                 return app.allocation
+            if name == "background":
+                with patch.object(ui.core, "_read_json", return_value={"phase": "running"}):
+                    try:
+                        app.watch("a" * 24, "PTY-test")
+                    except ui.Background:
+                        return "background"
+            if name == "port-form":
+                with patch.object(ui.ports, "mappings", return_value=[]), patch.object(ui.ports, "available", return_value=True):
+                    remote, local = app.port_form({"name": "PTY-test"})
+                return f"{remote}:{local}"
             vm = {"id": "computeinstance-synthetic", "name": "PTY-test", "state": "running", "region": "eu-north1",
                   "allocation": "preemptible", "project_name": "synthetic", "managed": True, "can_delete": True}
             app.vm_actions(vm)

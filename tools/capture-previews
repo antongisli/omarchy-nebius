@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Reproducible documentation captures on Omarchy; never opens a desktop window.
+set -Eeuo pipefail
+readonly ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly CAPTURE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nebius-preview.XXXXXX")"
+trap 'rm -r -- "$CAPTURE_DIR"' EXIT
+mkdir -p "$CAPTURE_DIR/plugin" "$ROOT/docs/screenshots"
+cp -a "$ROOT/libexec" "$ROOT/tools" "$ROOT/qml" "$ROOT/assets" "$ROOT/manifest.json" "$CAPTURE_DIR/plugin/"
+cp -a /usr/share/omarchy/shell/Commons /usr/share/omarchy/shell/Ui "$CAPTURE_DIR/"
+cp "$ROOT/tools/PreviewPanel.qml" "$CAPTURE_DIR/Ui/KeyboardPanel.qml"
+python3 "$ROOT/tools/render_preview.py" --output "$ROOT/assets/terminal-preview.svg"
+cp "$ROOT/assets/terminal-preview.svg" "$CAPTURE_DIR/plugin/assets/terminal-preview.svg"
+cp "$ROOT/tools/preview.qml" "$CAPTURE_DIR/shell.qml"
+QT_QPA_PLATFORM=offscreen NEBIUS_QA_IMAGE="$ROOT/docs/screenshots/launcher.png" \
+  timeout 20s quickshell -p "$CAPTURE_DIR/shell.qml" --no-color
+cp "$ROOT/tools/terminal-capture.qml" "$CAPTURE_DIR/shell.qml"
+for surface in cover port-form ports overview activity; do
+  python3 "$ROOT/tools/render_preview.py" --surface "$surface" --width 80 --height 26 --output "$CAPTURE_DIR/$surface.svg"
+  image_path="$ROOT/docs/screenshots/$surface.png"
+  [[ $surface != cover ]] || image_path="$ROOT/preview.png"
+  QT_QPA_PLATFORM=offscreen NEBIUS_PREVIEW_SOURCE="$CAPTURE_DIR/$surface.svg" \
+    NEBIUS_QA_IMAGE="$image_path" \
+    timeout 20s quickshell -p "$CAPTURE_DIR/shell.qml" --no-color
+done
+printf 'Captured preview.png, four terminal screens and the native launcher using example data.\n'

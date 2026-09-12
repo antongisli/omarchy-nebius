@@ -50,7 +50,9 @@ class PreviewScreen:
         raise FrameReady()
 
 
-def render(width=80, height=30, allocation="on_demand"):
+def render(width=80, height=30, allocation="on_demand", surface="capacity"):
+    if surface == "cover":
+        return render_cover()
     screen = PreviewScreen(width, height)
     with patch.object(curses, "has_colors", return_value=False), patch.object(curses, "curs_set"):
         app = ui.App(screen)
@@ -72,12 +74,45 @@ def render(width=80, height=30, allocation="on_demand"):
     with patch.object(app, "read", side_effect=AssertionError("Preview cannot query cloud")), \
          patch.object(app, "mutate", side_effect=AssertionError("Preview cannot mutate cloud")):
         try:
-            app.capacity_flow(launch=True)
+            if surface == "port-form":
+                app.port_form({"name": "inference · H100"}, remote_port=8000, local_port=18000)
+            elif surface == "ports":
+                with patch.object(ui.ports, "listing", return_value=[
+                    {"id": "demo1", "vm_id": "computeinstance-demo", "vm_name": "comfyui", "enabled": True,
+                     "local_port": 8188, "remote_port": 8188, "state": "Connected", "url": "http://127.0.0.1:8188"},
+                    {"id": "demo2", "vm_id": "computeinstance-demo2", "vm_name": "inference", "enabled": True,
+                     "local_port": 18000, "remote_port": 8000, "state": "Reconnecting", "url": "http://127.0.0.1:18000"},
+                ]):
+                    app.ports()
+            elif surface == "activity":
+                with patch.object(ui.jobs, "jobs", return_value=[
+                    {"id": "demo1", "command": "delete", "title": "Delete VM · comfyui", "phase": "running",
+                     "operation": {"message": "VM deleted; deleting its boot disk"}},
+                    {"id": "demo2", "command": "create", "phase": "ready", "result": {"name": "inference"}},
+                    {"id": "demo3", "command": "stop", "phase": "error", "title": "Stop VM · experiment",
+                     "error": "Connection timed out. Check the VM state before retrying."},
+                ]):
+                    app.activity()
+            elif surface in {"overview", "vm-actions", "delete-review", "home"}:
+                vm = {"id": "computeinstance-example", "name": "comfyui", "state": "running", "region": "eu-north1",
+                      "allocation": "on_demand", "project_name": "personal", "platform": "gpu-h100-sxm",
+                      "managed": True, "can_delete": True, "ssh_user": "dev", "disk_id": "computedisk-example"}
+                app.inventory = {"vms": [vm, {**vm, "id": "computeinstance-second", "name": "inference", "state": "stopped"}], "source": "live"}
+                with patch.object(ui.jobs, "jobs", return_value=[]), patch.object(ui.core, "_read_json", return_value={}):
+                    if surface == "overview":
+                        app.overview()
+                    elif surface == "home":
+                        app.entry = "home"
+                        app.run()
+                    else:
+                        app.vm_actions(vm, action="delete" if surface == "delete-review" else None)
+            else:
+                app.capacity_flow(launch=True)
         except FrameReady:
             pass
     cell_w, cell_h = 10, 22
     content = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width * cell_w}" height="{height * cell_h}" viewBox="0 0 {width * cell_w} {height * cell_h}">',
-               '<title>Nebius GPU picker: production menu, synthetic example data</title>',
+               '<title>Nebius: production menu, synthetic example data</title>',
                '<rect width="100%" height="100%" fill="#101820"/>']
     for y, x, text, attr in screen.draws:
         selected = bool(attr & app.selection)
@@ -95,13 +130,35 @@ def render(width=80, height=30, allocation="on_demand"):
     return "\n".join(content) + "\n"
 
 
+def render_cover():
+    """Keep the branded cover, with two current production terminal screens."""
+    capacity = render(80, 28, surface="capacity").replace('<svg ', '<svg x="32" y="196" ', 1)
+    form = render(52, 28, surface="port-form").replace('<svg ', '<svg x="872" y="196" ', 1)
+    return ('<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="896" viewBox="0 0 1440 896">'
+            '<title>Nebius GPU: capacity and SSH ports, production interface with example data</title>'
+            '<rect width="1440" height="896" fill="#E0FF4F"/>'
+            '<text x="40" y="94" font-family="sans-serif" font-size="62" font-weight="700" fill="#052B42">Need a bigger GPU?</text>'
+            '<text x="42" y="143" font-family="sans-serif" font-size="27" fill="#052B42">Find capacity. Launch a VM. Jump in.</text>'
+            '<rect x="24" y="181" width="1392" height="649" fill="#101820"/>'
+            + capacity + form +
+            '<path d="M848 207V804" stroke="#35454E"/>'
+            '<text x="40" y="871" font-family="monospace" font-size="17" fill="#052B42">NEBIUS GPU / OMARCHY</text>'
+            '<text x="900" y="871" font-family="monospace" font-size="17" fill="#052B42">REAL INTERFACE · EXAMPLE DATA</text></svg>\n')
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--width", type=int, default=80)
     parser.add_argument("--height", type=int, default=30)
     parser.add_argument("--allocation", choices=("on_demand", "preemptible"), default="on_demand")
+    parser.add_argument("--surface", choices=("cover", "capacity", "ports", "port-form", "activity", "overview", "vm-actions", "delete-review", "home"), default="capacity")
     parser.add_argument("--output", type=Path, default=ROOT / "assets/terminal-preview.svg")
     args = parser.parse_args()
     target = args.output
-    target.write_text(render(args.width, args.height, args.allocation), encoding="utf-8")
+    drawing = render(args.width, args.height, args.allocation, args.surface)
+    if target.suffix.lower() == ".png":
+        import cairosvg  # Optional build dependency, never needed by the plugin.
+        cairosvg.svg2png(bytestring=drawing.encode("utf-8"), write_to=str(target))
+    else:
+        target.write_text(drawing, encoding="utf-8")
     print(target)

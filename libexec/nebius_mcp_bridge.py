@@ -15,6 +15,8 @@ import threading
 import time
 from typing import Any
 
+from nebius_runtime import VERSION, cli_path
+
 
 MCP_COMMIT = "6388bf779acdd331d9b2016230b37f8bf7177e12"
 MCP_SPEC = f"nebius-mcp-server@git+https://github.com/nebius/mcp-server@{MCP_COMMIT}"
@@ -52,14 +54,14 @@ class McpClient:
         environment.update(
             {
                 "SAFE_MODE": "false",
-                "NEBIUS_CLI_BIN": str(home / ".nebius" / "bin" / "nebius"),
+                "NEBIUS_CLI_BIN": str(cli_path()),
                 "NEBIUS_PROFILE": PROFILE_NAME,
                 "UV_CACHE_DIR": str(
                     Path(environment.get("XDG_CACHE_HOME", home / ".cache"))
                     / "nebius"
                     / "uv"
                 ),
-                "PATH": f"{home / '.nebius' / 'bin'}:/usr/local/bin:/usr/bin:/bin",
+                "PATH": f"{cli_path().parent}:/usr/local/bin:/usr/bin:/bin",
             }
         )
         self.process = subprocess.Popen(
@@ -146,7 +148,7 @@ class McpClient:
             {
                 "protocolVersion": "2025-06-18",
                 "capabilities": {},
-                "clientInfo": {"name": "nebius-omarchy-plugin", "version": "0.1.0"},
+                "clientInfo": {"name": "nebius-omarchy-plugin", "version": VERSION},
             },
             timeout=180,
         )

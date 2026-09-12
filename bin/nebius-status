@@ -11,7 +11,7 @@ readonly PROJECT_MARKER="$STATE_DIR/project-ok"
 readonly CAPACITY_CACHE="$STATE_DIR/capacity.json"
 readonly OPERATION_FILE="$STATE_DIR/operation.json"
 readonly MCP_MARKER="$STATE_DIR/mcp-$MCP_COMMIT-ok"
-readonly CLI="$HOME/.nebius/bin/nebius"
+readonly CLI="$(python3 "$(dirname -- "${BASH_SOURCE[0]}")/../libexec/nebius_runtime.py")"
 readonly BRIDGE="$HOME/.config/omarchy/plugins/nebius/libexec/nebius_mcp_bridge.py"
 readonly CORE="$HOME/.config/omarchy/plugins/nebius/libexec/nebius_core.py"
 readonly CODEX_MCP="$HOME/.config/omarchy/plugins/nebius/libexec/nebius_codex_mcp.py"
@@ -134,6 +134,12 @@ capacity_source="$CAPACITY_CACHE"
 operation_source="$OPERATION_FILE"
 fallback_capacity=""
 fallback_operation=""
+if [[ -f ${CORE%/*}/nebius_jobs.py ]]; then
+  fallback_operation=$(mktemp "$STATE_DIR/.operations.XXXXXX")
+  if python3 "${CORE%/*}/nebius_jobs.py" >"$fallback_operation"; then
+    operation_source="$fallback_operation"
+  fi
+fi
 if [[ ! -s $capacity_source ]] || ! jq -e . "$capacity_source" >/dev/null 2>&1; then
   fallback_capacity=$(mktemp "$STATE_DIR/.capacity-empty.XXXXXX")
   printf '%s\n' '{"projects":[],"offerings":[]}' >"$fallback_capacity"

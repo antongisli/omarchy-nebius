@@ -12,7 +12,7 @@ printf '\n  Nebius setup details\n\n'
 printf '\n  Pinned components\n\n'
 printf 'Nebius CLI      0.12.269\n'
 printf 'Nebius MCP      6388bf779acdd331d9b2016230b37f8bf7177e12\n'
-printf 'CLI location    %s\n' "$HOME/.nebius/bin/nebius"
+printf 'CLI location    %s\n' "$(python3 "$(dirname -- "${BASH_SOURCE[0]}")/../libexec/nebius_runtime.py")"
 printf 'MCP cache       %s\n' "${XDG_CACHE_HOME:-$HOME/.cache}/nebius/uv"
 printf 'Agent server    nebius (Codex + Claude Code; fixed typed tools)\n'
 printf 'SSH key         %s\n' "$HOME/.ssh/nebius-ed25519"
@@ -21,7 +21,7 @@ printf 'Launch log      %s\n' "$STATE_DIR/create.log"
 
 printf '\n  VM defaults\n\n'
 printf 'Shape           1 GPU, selected from current capacity\n'
-printf 'Allocation      preemptible\n'
+printf 'Allocation      on-demand; press P to choose preemptible\n'
 printf 'Runtime         until you stop the VM manually\n'
 printf 'Deletion        explicit confirmation only; never automatic\n'
 

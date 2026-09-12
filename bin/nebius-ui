@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
-exec python3 "$(dirname "$(realpath "$0")")/../libexec/nebius_ui.py" "${1:-home}"
+if [[ $# -eq 0 ]]; then set -- home; fi
+exec python3 "$(dirname "$(realpath "$0")")/../libexec/nebius_ui.py" "$@"

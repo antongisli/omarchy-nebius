@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import sys
+import nebius_jobs as jobs
+import nebius_ports as ports
 from typing import Any, Callable
 
 from nebius_core import (
@@ -26,7 +28,9 @@ from nebius_core import (
 )
 
 
-SERVER_INFO = {"name": "omarchy-nebius", "version": "0.7.0"}
+from nebius_runtime import VERSION
+
+SERVER_INFO = {"name": "omarchy-nebius", "version": VERSION}
 INSTRUCTIONS = (
     "Manage Nebius GPU VMs. Start with view_gpu_capacity without refresh so choices appear immediately; "
     "state the snapshot age, and request a live refresh only when the user asks. Let the user choose a GPU type. "
@@ -45,6 +49,8 @@ INSTRUCTIONS = (
     "The client approval for this write tool is the final confirmation—never ask the user to type a magic phrase. "
     "Never delete without plain-language confirmation and the destructive tool approval. Remind the user that stopped "
     "disks remain billable."
+    " Creation and lifecycle tools return background job IDs; use list_operations to follow completion. "
+    "New VMs have static public IPv4 with SSH-only ingress. Use forward_port for local application access; ask which ports."
 )
 
 
@@ -76,6 +82,15 @@ def tool(
 
 
 TOOLS = [
+    tool("list_operations", "List background operations, their progress, errors and results.", {}, [], read_only=True),
+    tool("list_ports", "List saved localhost port forwards and connection status.", {}, [], read_only=True),
+    tool("forward_port", "Save a loopback-only SSH forward that reconnects after login. Ask which application port to forward.",
+         {"vm_id": {"type": "string"}, "remote_port": {"type": "integer", "minimum": 1, "maximum": 65535},
+          "local_port": {"type": "integer", "minimum": 1024, "maximum": 65535}, "username": {"type": "string"}},
+         ["vm_id", "remote_port"], read_only=False),
+    tool("manage_port", "Pause, resume or remove a saved local port forward.",
+         {"id": {"type": "string"}, "action": {"type": "string", "enum": ["pause", "resume", "remove"]}},
+         ["id", "action"], read_only=False),
     tool(
         "view_gpu_capacity",
         "List cached GPU types and on-demand/preemptible availability immediately, with snapshot age and refresh status.",
@@ -185,14 +200,17 @@ def _call(name: str, arguments: dict[str, Any]) -> Any:
             arguments.get("name"), arguments.get("offering_id"), arguments.get("project_id"),
             arguments.get("allocation", "on_demand"), arguments.get("auto_stop_hours", 0)
         ),
-        "create_project": lambda: create_nebius_project(
-            str(arguments.get("region", "")), name=arguments.get("name"), confirmed=True
-        ),
-        "create_gpu_vm": lambda: create_gpu_vm(str(arguments.get("plan_id", ""))),
-        "start_vm": lambda: start_vm(str(arguments.get("vm_id", ""))),
-        "stop_vm": lambda: stop_vm(str(arguments.get("vm_id", ""))),
-        "delete_vm": lambda: delete_vm(str(arguments.get("vm_id", "")), arguments.get("confirmed") is True),
-        "delete_saved_disk": lambda: delete_saved_disk(str(arguments.get("disk_id", "")), arguments.get("confirmed") is True),
+        "create_project": lambda: jobs.submit(["create-project", "--region", str(arguments.get("region", "")),
+                                               "--name", str(arguments.get("name", "")), "--confirmed"]),
+        "create_gpu_vm": lambda: jobs.submit(["create", "--plan-id", str(arguments.get("plan_id", ""))]),
+        "start_vm": lambda: jobs.submit(["start", "--vm-id", str(arguments.get("vm_id", ""))]),
+        "stop_vm": lambda: jobs.submit(["stop", "--vm-id", str(arguments.get("vm_id", ""))]),
+        "delete_vm": lambda: submit_delete("delete", "--vm-id", arguments.get("vm_id"), arguments.get("confirmed")),
+        "delete_saved_disk": lambda: submit_delete("delete-disk", "--disk-id", arguments.get("disk_id"), arguments.get("confirmed")),
+        "list_operations": lambda: {"jobs": jobs.jobs()},
+        "list_ports": lambda: {"ports": ports.listing()},
+        "forward_port": lambda: ports.add(arguments["vm_id"], arguments["remote_port"], arguments.get("local_port"), arguments.get("username")),
+        "manage_port": lambda: ports.change(arguments["id"], arguments["action"]),
         "inspect_vm_storage": lambda: vm_storage(str(arguments.get("vm_id", ""))),
         "connect_vm": lambda: connect_vm(str(arguments.get("vm_id", "")), username=arguments.get("username")),
         "check_vm_quota": lambda: preflight_vm(str(arguments.get("region", "")),
@@ -202,6 +220,12 @@ def _call(name: str, arguments: dict[str, Any]) -> Any:
     if name not in handlers:
         raise NebiusError(f"Unknown tool: {name}")
     return handlers[name]()
+
+
+def submit_delete(command, flag, resource_id, confirmed):
+    if confirmed is not True:
+        raise NebiusError("Deletion requires an explicit confirmation")
+    return jobs.submit([command, flag, str(resource_id or ""), "--confirmed"])
 
 
 def _write(value: dict[str, Any]) -> None:

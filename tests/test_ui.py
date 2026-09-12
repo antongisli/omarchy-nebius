@@ -58,7 +58,7 @@ class KeyboardTests(unittest.TestCase):
         application.menu("Menu", [("First", "First description", 1), ("Second", "Second description", 2)])
         label = next(draw for draw in screen.draws if "› First" in draw[2])
         detail = next(draw for draw in screen.draws if draw[2] == "First description")
-        second = next(draw for draw in screen.draws if draw[2].strip() == "Second")
+        second = next(draw for draw in screen.draws if draw[2].strip() == "Second [2]")
         self.assertEqual(label[1], 2)
         self.assertEqual(detail[1], 6)
         self.assertEqual(detail[0], label[0] + 1)
@@ -237,23 +237,23 @@ class KeyboardTests(unittest.TestCase):
         with self.assertRaises(ui.Back):
             application.menu("Jump", [("One", "", {"id": "one"})], actions={"m": lambda vm: {"manage": vm}})
 
-    def test_delete_vm_defaults_to_cancel(self):
-        application, screen = app([curses.KEY_END, "\n", "\n"])
+    def test_delete_vm_enter_does_not_confirm_and_escape_cancels(self):
+        application, screen = app(["d", "\n", "\x1b"])
         vm = {"id": "computeinstance-test", "name": "test", "state": "running", "region": "eu-north1",
               "allocation": "preemptible", "project_name": "personal", "can_delete": True, "managed": True}
         with patch.object(application, "mutate") as mutate:
             application.vm_actions(vm)
             mutate.assert_not_called()
-        self.assertIn("› Cancel", screen.frames[-1])
+        self.assertIn("[Esc] cancel", screen.frames[-1])
 
-    def test_unused_disk_delete_defaults_to_cancel(self):
-        application, screen = app([curses.KEY_END, "\n", "\n"], 48, 20)
+    def test_unused_disk_delete_enter_does_not_confirm_and_escape_cancels(self):
+        application, screen = app(["d", "\n", "\x1b"], 48, 20)
         disk = {"name": "unused-boot", "disk_id": "computedisk-test", "disk_gib": 200,
                 "project": {"region": "eu-north1", "project_name": "personal"}}
         with patch.object(application, "mutate") as mutate:
             application.disk_actions(disk)
             mutate.assert_not_called()
-        self.assertIn("› Cancel", screen.frames[-1])
+        self.assertIn("[Esc] cancel", screen.frames[-1])
 
     def test_actions_remain_visible_and_in_bounds_for_vm_states(self):
         for state in ["running", "stopped", "disk remains"]:

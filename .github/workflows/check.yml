@@ -18,7 +18,7 @@ jobs:
       - name: Validate manifest and syntax
         run: |
           python3 -m json.tool manifest.json >/dev/null
-          for script in bin/*; do bash -n "$script"; done
+          for script in bin/* tools/capture-previews; do bash -n "$script"; done
           python3 -m compileall -q libexec tests tools
       - name: Run tests without cloud access
         run: python3 -m unittest discover -s tests -v

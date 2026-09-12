@@ -15,7 +15,9 @@ readonly CAPACITY_CACHE="$STATE_DIR/capacity.json"
 readonly MCP_MARKER="$STATE_DIR/mcp-$MCP_COMMIT-ok"
 readonly LOG_FILE="$STATE_DIR/setup.log"
 readonly INSTALL_RECEIPT="$STATE_DIR/install-receipt.json"
-readonly CLI="$HOME/.nebius/bin/nebius"
+readonly RUNTIME="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../libexec" && pwd)/nebius_runtime.py"
+CLI=$(python3 "$RUNTIME")
+readonly PRIVATE_CLI="$(python3 "$RUNTIME" private-cli)"
 readonly BRIDGE="$HOME/.config/omarchy/plugins/nebius/libexec/nebius_mcp_bridge.py"
 readonly CORE="$HOME/.config/omarchy/plugins/nebius/libexec/nebius_core.py"
 readonly CODEX_MCP="$HOME/.config/omarchy/plugins/nebius/libexec/nebius_codex_mcp.py"
@@ -47,6 +49,7 @@ fi
 
 stage="starting"
 temp_dir=""
+cli_candidate=""
 previous_active=""
 
 write_state() {
@@ -129,6 +132,9 @@ ensure_tenant_selected() {
 }
 
 cleanup() {
+  if [[ -n $cli_candidate ]]; then
+    rm -f -- "$cli_candidate"
+  fi
   if [[ -n $temp_dir && -d $temp_dir ]]; then
     rm -f "$temp_dir/nebius"
     rmdir "$temp_dir" 2>/dev/null || true
@@ -179,6 +185,14 @@ fi
 if [[ $installed_version == "$CLI_VERSION" ]]; then
   say "✓ Nebius CLI $CLI_VERSION already installed"
 else
+  # An unrelated CLI version belongs to the user. Install our tested version
+  # privately instead; never overwrite or claim ownership of the existing one.
+  CLI="$PRIVATE_CLI"
+  if [[ -e $CLI || -L $CLI ]]; then
+    say "The private CLI path already contains an unexpected file: $CLI"
+    say "Nothing was replaced. Move that file somewhere safe, then run setup again."
+    false
+  fi
   case "$(uname -m)" in
   x86_64 | amd64)
     cli_arch="x86_64"
@@ -202,9 +216,19 @@ else
   printf '%s  %s\n' "$cli_sha256" "$temp_dir/nebius" | sha256sum -c -
   chmod 0755 "$temp_dir/nebius"
   [[ $($temp_dir/nebius version) == "$CLI_VERSION" ]]
-  mkdir -p "$HOME/.nebius/bin"
-  install -m 0755 "$temp_dir/nebius" "$CLI"
-  mark_owned cli
+  mkdir -p "$(dirname -- "$CLI")"
+  # Publish without clobbering a file created concurrently with setup.
+  cli_candidate=$(mktemp "$(dirname -- "$CLI")/.nebius.XXXXXX")
+  install -m 0755 "$temp_dir/nebius" "$cli_candidate"
+  if ! python3 -c 'import os, sys; os.link(sys.argv[1], sys.argv[2], follow_symlinks=False)' "$cli_candidate" "$CLI"; then
+    rm -f -- "$cli_candidate"
+    say "The CLI destination changed during setup. Nothing was overwritten."
+    false
+  fi
+  rm -f -- "$cli_candidate"
+  temp_receipt=$(mktemp "$STATE_DIR/.receipt.XXXXXX")
+  jq --arg path "$CLI" '.cli_path = $path | .owned.cli = true' "$INSTALL_RECEIPT" >"$temp_receipt"
+  mv "$temp_receipt" "$INSTALL_RECEIPT"
   say "✓ Installed and verified Nebius CLI $CLI_VERSION"
 fi
 
