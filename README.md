@@ -65,6 +65,9 @@ fresh H100 launch. It does not remove VM allocation or first-use disk preparatio
 which can dominate total launch time. The image currently belongs to the
 `antons-party` project; repository access does not grant image access. See the
 [image repository and access options](https://gitlab.nebius.dev/anton-smith/nebius-image-boost).
+The proposed setup-time opt-in and first-use import flow is documented in the
+[fast-image import design](docs/fast-image-import.md); it is not implemented or
+advertised as available yet.
 
 <a id="install"></a>
 
