@@ -76,6 +76,13 @@ def render(width=80, height=30, allocation="on_demand", surface="capacity"):
         try:
             if surface == "port-form":
                 app.port_form({"name": "inference · H100"}, remote_port=8000, local_port=18000)
+            elif surface in {"shortcut-form", "shortcut-error"}:
+                app.shortcut_form("SUPER + CTRL + 1" if surface == "shortcut-error" else None,
+                                  error="Super+Ctrl+1 is already used by Bar panel 1. Choose another key; nothing was changed."
+                                  if surface == "shortcut-error" else "")
+            elif surface in {"shortcuts", "shortcuts-unset"}:
+                with patch.object(ui.shortcuts, "configured", return_value=None if surface == "shortcuts-unset" else ui.shortcuts.DEFAULT):
+                    app.keyboard_shortcuts()
             elif surface == "ports":
                 with patch.object(ui.ports, "listing", return_value=[
                     {"id": "demo1", "vm_id": "computeinstance-demo", "vm_name": "comfyui", "enabled": True,
@@ -151,7 +158,7 @@ if __name__ == "__main__":
     parser.add_argument("--width", type=int, default=80)
     parser.add_argument("--height", type=int, default=30)
     parser.add_argument("--allocation", choices=("on_demand", "preemptible"), default="on_demand")
-    parser.add_argument("--surface", choices=("cover", "capacity", "ports", "port-form", "activity", "overview", "vm-actions", "delete-review", "home"), default="capacity")
+    parser.add_argument("--surface", choices=("cover", "capacity", "ports", "port-form", "activity", "overview", "vm-actions", "delete-review", "home", "shortcuts", "shortcuts-unset", "shortcut-form", "shortcut-error"), default="capacity")
     parser.add_argument("--output", type=Path, default=ROOT / "assets/terminal-preview.svg")
     args = parser.parse_args()
     target = args.output

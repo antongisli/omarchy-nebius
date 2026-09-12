@@ -58,17 +58,22 @@ omarchy plugin add https://github.com/antongisli/omarchy-nebius --enable
 
 Omarchy clones and enables the plugin but intentionally runs no install hook. Open the **Nebius** bar icon and select **Set up Nebius**. The keyboard manager does not require an agent.
 
-Optional global shortcuts are provided in [config/keybindings.lua](../config/keybindings.lua):
+Setup installs **Super+Ctrl+M → Open Nebius** if the key is free and no opening-shortcut choice has been saved. It preserves an existing or disabled choice. The shortcut targets the plugin by ID, not the widget's bar position. If occupied, setup leaves it alone and points to **Shift+K · Shortcuts**; account setup can still finish. Open those settings from the panel or manager, including before sign-in. Choose **E · Change opening shortcut**, use Tab or up/down between modifiers and key, left/right to choose modifiers, type a letter, number or function-key name such as `F12` (F1–F24), then Enter to save. Escape cancels without writing. Conflicts stay in the form; F2 shows complete error details. Save validates the Lua, reloads Hyprland and checks the live binding; failed verification restores the prior file unless a concurrent edit appeared, which is preserved and reported.
+
+**D · Disable opening shortcut** keeps the bar icon and is remembered through setup/repair. When no shortcut is set, the same action reads **Keep shortcut disabled** and saves that opt-out after confirmation, so later setup does not add the default.
+
+Only the marked Nebius block in `~/.config/hypr/bindings.lua` is managed. Other applications, including `other-tool`, keep their bindings. Uninstall removes the marked block, reloads Hyprland and checks the result. Manually edited or symlinked binding files may require manual repair rather than automatic replacement.
+
+Optional direct-action shortcuts are provided in [config/keybindings.lua](../config/keybindings.lua):
 
 | Shortcut | Action |
 | --- | --- |
 | Super+Ctrl+G | Get a GPU VM |
 | Super+Ctrl+J | Jump into a running VM |
-| Super+Ctrl+M | Open the manager |
 
 They are not automatically installed elsewhere; check `omarchy menu keybindings --print` before adding them to your user `bindings.lua`. Existing shortcuts and packaged defaults are preserved.
 
-Omarchy's numbered panel shortcuts depend on the widget's position in your bar. Use the icon or the explicit G/J/M bindings for a stable destination.
+Omarchy's Super+Ctrl+1–9 shortcuts address panels in the **right-hand** bar section. They do not target Nebius by name, and do not include a Nebius icon placed in the centre or left. Use the dedicated opening shortcut or icon instead.
 
 Use arrows or `j/k`, Enter, Escape/back, and `/` search throughout the terminal. Menus separate section headings, bold choices, and indented descriptions, with a full-width selection highlight and space between choices. `Home` / `End` select the first / last item; Page Up / Page Down scroll by a page. Press `?` for the selected item's complete text and all keyboard shortcuts. Long resource details wrap; review and JSON details preserve indentation. From the manager or N panel:
 
@@ -80,6 +85,7 @@ Use arrows or `j/k`, Enter, Escape/back, and `/` search throughout the terminal.
 - In **Your VMs**, Enter opens the selected resource's actions. In **Jump**, Enter connects and `M` opens actions for the highlighted VM. Deletion has one review: Enter pages through the exact resources/data-loss warning, `D` confirms only after all terms are visible, and Esc cancels. Secondary disks are kept.
 - `A` — progress, result and full diagnostic details.
 - `S` — account/reconnect.
+- `Shift+K` — change or disable the opening shortcut (lowercase `k` moves up).
 - `R` — refresh the current capacity/inventory view, or panel status.
 - `U` — **Uninstall Nebius plugin** and its local setup. The confirmation explicitly warns that cloud resources remain unchanged and may continue to incur charges.
 

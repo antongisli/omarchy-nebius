@@ -28,6 +28,7 @@ import nebius_core as core
 import nebius_jobs as jobs
 import nebius_ports as ports
 import nebius_ssh as ssh_client
+import nebius_shortcuts as shortcuts
 
 
 class Back(Exception):
@@ -1258,6 +1259,87 @@ class App:
             except core.NebiusError as error:
                 self.show_error(error)
 
+    def shortcut_form(self, initial=None, *, error=""):
+        # Extend the native two-field form: preview, modifiers, key, inline
+        # conflict feedback. Keep arrows/Tab/Escape and the existing palette.
+        parts = (initial or shortcuts.DEFAULT).split(" + ")
+        modifiers, value = " + ".join(parts[:-1]), parts[-1]
+        options = list(shortcuts.MODIFIERS)
+        if modifiers not in options:
+            options.append(modifiers)
+        index, active, replace, issue = options.index(modifiers), 1, True, error
+        while True:
+            height, width = self.screen.getmaxyx()
+            if height < 20 or width < 44:
+                self.frame("Keyboard shortcut", "Enlarge the terminal to 44×20", "Esc cancel")
+                self.screen.refresh()
+                if self.key() in ("\x1b", 27):
+                    raise Back()
+                continue
+            bottom = self.frame("Keyboard shortcut", "Open Nebius from anywhere",
+                                "Tab/↑↓ fields   ←→ modifiers   Enter save   Esc cancel" + ("   F2 error details" if issue else ""))
+            proposed = options[index] + " + " + value
+            self.put(6, 2, shortcuts.label(proposed) + "  →  Nebius", self.accent | curses.A_BOLD)
+            self.put(8, 2, ("› " if active == 0 else "  ") + "Modifiers", curses.A_BOLD)
+            self.put(9, 6, "‹ " + shortcuts.label(options[index]) + " ›", self.selection if active == 0 else 0)
+            self.put(11, 2, ("› " if active == 1 else "  ") + "Key", curses.A_BOLD)
+            self.put(12, 6, "[ " + (value or " ") + " ]  Letter, number or F1–F24", self.selection if active == 1 else 0)
+            note = issue or "Type a key. Existing shortcuts are kept; conflicts block saving."
+            for y, line in enumerate(self.wrap(note, width - 6), 13 if issue else 14):
+                if y <= bottom:
+                    self.put(y, 2, line, self.error if issue else 0)
+            self.screen.refresh()
+            key = self.key()
+            if key in ("\x1b", 27):
+                raise Back()
+            if key == curses.KEY_F2 and issue:
+                self.message("Shortcut not saved", issue, error=True)
+                continue
+            if key in ("\t", curses.KEY_DOWN, curses.KEY_UP, curses.KEY_BTAB):
+                active, replace = 1 - active, True
+            elif key in (curses.KEY_LEFT, curses.KEY_RIGHT):
+                if active == 0:
+                    index = (index + (1 if key == curses.KEY_RIGHT else -1)) % len(options)
+                    issue = ""
+            elif key in ("\n", "\r", curses.KEY_ENTER):
+                try:
+                    chord = shortcuts.normalize(proposed)
+                    self.frame("Saving shortcut", "Checking conflicts and applying your choice…", "Please wait")
+                    self.screen.refresh()
+                    return shortcuts.save(chord)
+                except (core.NebiusError, OSError) as error:
+                    issue = str(error)
+            elif active == 1 and key in ("\x15", "\x7f", "\b", curses.KEY_BACKSPACE, curses.KEY_DC):
+                value, issue, replace = "", "", True
+            elif active == 1 and isinstance(key, str) and re.fullmatch("[A-Za-z0-9]", key):
+                value = ("" if replace else value) + key.upper()
+                value, issue, replace = value[-3:], "", False
+
+    def keyboard_shortcuts(self):
+        while True:
+            current = shortcuts.configured()
+            choice = self.menu("Shortcuts", [
+                ("Change opening shortcut", shortcuts.label(current) + (" · opens the Nebius panel" if current else " · choose a key to open Nebius"), "change"),
+                ("Disable opening shortcut" if current else "Keep shortcut disabled",
+                 "Keep the bar icon; remove only the dedicated shortcut" if current else "Do not add a shortcut during setup or repair", "disable"),
+            ], notes=["Super+Ctrl+1 follows the right-hand bar order. A dedicated key follows Nebius wherever you put it."],
+                actions={"e": "change", "d": "disable"},
+                footer="↑↓ / j k move   E change   D disable   Enter select   Esc back")
+            try:
+                if choice == "change":
+                    result = self.shortcut_form(current)
+                elif self.confirm_launch([("Remove " + shortcuts.label(current) + "?" if current else "Keep the dedicated shortcut disabled, including during setup?")
+                                          + " The Nebius bar icon and all cloud resources stay unchanged."],
+                                                     "", title="Disable shortcut", action="disable shortcut", confirm_key="d"):
+                    result = shortcuts.save(None)
+                else:
+                    continue
+                self.message("Shortcut saved", result)
+            except Back:
+                continue
+            except (core.NebiusError, OSError) as error:
+                self.message("Shortcut not saved", str(error), error=True)
+
     def account(self):
         curses.def_prog_mode()
         curses.endwin()
@@ -1286,6 +1368,8 @@ class App:
                     self.ssh(self.entry_vm)
                 elif entry == "account":
                     self.account()
+                elif entry == "shortcuts":
+                    self.keyboard_shortcuts()
             except Background:
                 entry = "overview"
                 continue
@@ -1306,8 +1390,9 @@ class App:
                     ("[P] SSH port forwarding", "Open remote apps locally; add, pause or remove ports", "ports", "Manage"),
                     ("[A] Activity", "Follow concurrent operations and inspect results", "activity", "Manage"),
                     ("[S] Account / reconnect", "Connect your Nebius account and tools", "account", "Account"),
+                    ("[Shift+K] Shortcuts", "Choose the key that opens Nebius", "shortcuts", "Settings"),
                 ], subtitle="Your projects · keyboard first", notes=[note] if note else [],
-                    actions={"g": "get", "J": "jump", "v": "overview", "c": "capacity", "a": "activity", "s": "account", "p": "ports"},
+                    actions={"g": "get", "J": "jump", "v": "overview", "c": "capacity", "a": "activity", "s": "account", "p": "ports", "K": "shortcuts"},
                     footer="↑↓ / j k move   Enter select   G get GPU   Shift+J jump   V VMs   C capacity   Esc quit")
             except Back:
                 return
@@ -1315,7 +1400,7 @@ class App:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("screen", nargs="?", default="home", choices=("home", "get", "capacity", "overview", "jump", "activity", "ports", "connect"))
+    parser.add_argument("screen", nargs="?", default="home", choices=("home", "get", "capacity", "overview", "jump", "activity", "ports", "connect", "shortcuts"))
     parser.add_argument("--vm-id")
     parser.add_argument("--username")
     args = parser.parse_args()

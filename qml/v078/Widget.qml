@@ -48,17 +48,19 @@ Panel {
       + (busy ? "\nOperation in progress" : "")
   readonly property var actions: ready ? [
     { key: "G", title: "Get a GPU VM", screen: "get" },
-    { key: "J", title: "Jump into a VM", screen: "jump" },
+    { key: "J", keyLabel: "Shift+J", title: "Jump into a VM", screen: "jump" },
     { key: "P", title: "SSH port forwarding", screen: "ports" },
     { key: "V", title: "Your VMs", screen: "overview" },
     { key: "C", title: "GPU capacity", screen: "capacity" },
     { key: "A", title: "Activity", screen: "activity" },
     { key: "S", title: "Account / reconnect", screen: "setup" },
+    { key: "K", keyLabel: "Shift+K", title: "Shortcuts", screen: "shortcuts" },
     { key: "U", title: "Uninstall Nebius plugin", screen: "uninstall" }
   ] : [
     { key: "S", title: needsReconnect ? "Reconnect account" : "Set up Nebius", screen: "setup" },
     { key: "P", title: "SSH port forwarding", screen: "ports" },
     { key: "A", title: "Activity", screen: "activity" },
+    { key: "K", keyLabel: "Shift+K", title: "Shortcuts", screen: "shortcuts" },
     { key: "U", title: "Uninstall Nebius plugin", screen: "uninstall" }
   ]
 
@@ -172,6 +174,7 @@ Panel {
     function ports(): string { root.launch("ports"); return "ok" }
     function activity(): string { root.launch("activity"); return "ok" }
     function uninstall(): string { root.launch("uninstall"); return "ok" }
+    function shortcuts(): string { root.launch("shortcuts"); return "ok" }
   }
   BarIconButton {
     id: button
@@ -294,7 +297,7 @@ Panel {
               required property var modelData
               required property int index
               width: parent.width
-              text: modelData.key + "  " + modelData.title
+              text: (modelData.keyLabel || modelData.key) + "  " + modelData.title
               readonly property bool highlighted: root.cursorActive && root.cursorIndex === index
               foreground: highlighted ? root.brandInk : root.foreground
               accent: root.accent

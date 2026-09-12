@@ -84,8 +84,8 @@ fi
             bindings = home / ".config/hypr/bindings.lua"
             bindings.parent.mkdir(parents=True)
             bindings.write_text(
-                "before\n-- >>> independent Nebius plugin shortcuts >>>\nplugin lines\n"
-                "-- <<< independent Nebius plugin shortcuts <<<\nafter\n"
+                "-- before\n-- >>> independent Nebius plugin shortcuts >>>\n-- plugin lines\n"
+                "-- <<< independent Nebius plugin shortcuts <<<\n-- after\n"
             )
             cloud_marker = home / "cloud-resource"
             cloud_marker.write_text("must remain")
@@ -124,7 +124,9 @@ esac
 ''')
             self.write_command(fake_bin / "pacman", "#!/bin/sh\nexit 1\n")
             self.write_command(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
-            self.write_command(fake_bin / "hyprctl", "#!/bin/sh\nexit 0\n")
+            self.write_command(fake_bin / "hyprctl", "#!/bin/sh\necho '[]'\n")
+            self.write_command(fake_bin / "systemctl", "#!/bin/sh\nexit 0\n")
+            self.write_command(fake_bin / "luac", "#!/bin/sh\nexit 0\n")
             self.write_command(fake_bin / "omarchy", f'''#!/bin/sh
 [ "$3" != "--help" ] || exit 0
 rm -rf -- "{plugin}"
@@ -139,7 +141,7 @@ printf '%s\\n' 'Removed nebius.'
             self.assertEqual(other_cache.read_text(), "keep")
             self.assertFalse(ssh_key.exists())
             self.assertFalse(ssh_key.with_suffix(".pub").exists())
-            self.assertEqual(bindings.read_text(), "before\nafter\n")
+            self.assertEqual(bindings.read_text(), "-- before\n-- after\n")
             self.assertTrue((calls / "mcp-removed").exists())
             self.assertTrue((calls / "claude-mcp-removed").exists())
             self.assertTrue((calls / "profile-deleted").exists())

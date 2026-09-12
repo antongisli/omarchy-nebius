@@ -64,7 +64,7 @@ From the Nebius panel:
 
 Navigate with **arrows / j/k**, **Enter** and **Esc**. **/** searches; **?** shows help. In the terminal, Jump is **Shift+J**. In GPU menus, **P** switches allocation type.
 
-Want global shortcuts? Add the optional [Super+Ctrl+G/J/M bindings](config/keybindings.lua).
+**Super+Ctrl+M** opens Nebius after setup, wherever its icon sits. Change it with **Shift+K · Shortcuts** in the panel or manager: arrows choose modifiers, type a key, Enter saves. Occupied keys are left alone. Optional [direct GPU / SSH bindings →](config/keybindings.lua)
 
 ![VM overview with direct SSH, start, stop and deletion shortcuts](docs/screenshots/overview.png)
 

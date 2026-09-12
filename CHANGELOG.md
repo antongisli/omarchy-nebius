@@ -1,5 +1,12 @@
 # Release notes
 
+## 0.7.8 · 2026-09-12 · Configurable keyboard shortcut
+
+- A dedicated Super+Ctrl+M shortcut opens Nebius independently of bar position. Setup only installs it when free and respects a saved or disabled choice.
+- Shift+K opens shortcut settings from the panel or manager, including before account setup. Tab/arrows select fields and modifiers; type a key, Enter saves, Escape cancels.
+- Existing bindings are preserved. Conflicts block saving; syntax, compositor reload and live-binding verification protect changes. Uninstall verifies removal of the managed shortcut too.
+- Panel labels use Shift+J and Shift+K so lowercase j/k remain navigation keys.
+
 ## 0.7.7 · 2026-09-12 · Standalone uninstall
 
 - Panel and agent removal share one local-only uninstaller, with preflight, widget unload and post-removal checks.
