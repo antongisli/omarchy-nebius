@@ -548,14 +548,14 @@ class App:
         elapsed = int(time.time() - started)
         operation = core._read_json(getattr(self, "watched_operation", core.OPERATION_FILE), {}) if mutation else {}
         spinner = "|/-\\"[elapsed % 4]
-        bottom = self.frame(title, f"{spinner}  {elapsed // 60}:{elapsed % 60:02d} elapsed",
+        total = (timing.headline(operation) if operation.get("timeline") else "Waiting for operation progress") if mutation else f"{elapsed // 60}:{elapsed % 60:02d} elapsed"
+        bottom = self.frame(title, f"{spinner}  {total}",
                             "Esc/B background (work continues)" if mutation else "Esc cancel this read")
         y = 7
         for line in self.wrap(operation.get("message") or title)[:2]:
             self.put(y, 3, line, self.accent | curses.A_BOLD)
             y += 1
         if mutation:
-            self.put(5, 3, timing.headline(operation), self.accent | curses.A_BOLD)
             y = min(y + 1, 9)
             stage_lines = timing.lines(operation)
             slots = max(1, bottom - y + 1)

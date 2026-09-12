@@ -43,6 +43,18 @@ class LaunchReadinessTests(unittest.TestCase):
         self.assertEqual(timing.headline(value), 'Total to SSH ready: 23.0s')
         self.assertEqual(timing.elapsed(value), 23)
 
+    def test_progress_has_one_total_from_the_job_not_time_since_opening_screen(self):
+        operation = {**report(), 'phase': 'running', 'ssh_ready': False}
+        for width, height in [(48, 20), (80, 24)]:
+            application, screen = app([], width, height)
+            with patch.object(core, '_read_json', return_value=operation), \
+                 patch.object(timing, 'elapsed', return_value=65), patch.object(ui.time, 'time', return_value=103):
+                application.progress('Creating VM', 100, mutation=True)
+            frame = screen.frames[-1]
+            self.assertEqual(frame.count('Total elapsed:'), 1)
+            self.assertIn('Total elapsed: 1m 05.0s', frame)
+            self.assertNotIn('0:03 elapsed', frame)
+
     def test_repeated_stage_updates_do_not_reset_its_start(self):
         first = timing.advance({}, 'running', 'ssh', '2026-09-12T00:00:00+00:00')
         second = timing.advance(first, 'running', 'ssh', '2026-09-12T00:00:02+00:00')
