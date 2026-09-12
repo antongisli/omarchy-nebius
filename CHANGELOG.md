@@ -2,6 +2,10 @@
 
 ## Unreleased · Image picker and GPU grouping
 
+- VM lists update operation states immediately and refresh cloud inventory in the
+  background. Completed deletions disappear without pressing refresh; navigation
+  and search remain in place, and failed reads retain the last known inventory.
+
 - Launch/start now wait for verified SSH login. Stage durations and total time to
   SSH ready remain on a saved result screen, including after connection attempts.
   Activity and VM actions reopen the report; failed probes never open a session.
