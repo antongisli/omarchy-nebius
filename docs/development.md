@@ -28,6 +28,8 @@ NEBIUS_TEST_OFFLINE_CLI=1 python3 -m unittest discover -s tests -v
 
 Those three checks skip elsewhere. A successful unit-test run is not a live provisioning test. Test actual creation, SSH and deletion separately in a project you control, with explicit review of the billable resources.
 
+`compute … --async` returns an operation ID, not necessarily a JSON document, even with `--format json` ([CLI reference](https://docs.nebius.com/cli/reference/compute/instance/start)). The lifecycle regression tests pass raw stdout through the real CLI wrapper before polling; mocking `run_cli` with only a parsed dictionary would miss this contract. Unknown submission replies must keep the journal and must never trigger an automatic resubmission.
+
 ## Layout
 
 | Path | Responsibility |

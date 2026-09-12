@@ -1850,6 +1850,21 @@ def _cloud_operation_path(resource_id):
     return STATE_DIR / "cloud-operations" / (hashlib.sha256(resource_id.encode()).hexdigest() + ".json")
 
 
+def _compute_operation_id(response):
+    # --async prints a bare operation ID in the pinned CLI, even with --format
+    # json. Accept JSON encodings too, but never scrape an ID from error text.
+    if isinstance(response, str):
+        response = response.strip()
+        try:
+            response = json.loads(response)
+        except json.JSONDecodeError:
+            pass
+    operation_id = response.get("id") if isinstance(response, dict) else response
+    if not isinstance(operation_id, str) or not re.fullmatch(r"(?:computeoperation|operation)-[A-Za-z0-9_-]{1,128}", operation_id):
+        raise NebiusError("Cloud submission returned no valid operation ID. The request may already have completed; check the resource before retrying.")
+    return operation_id
+
+
 def _compute_mutation(kind, action, resource_id):
     """Journal submission before waiting; interrupted requests are never replayed blindly."""
     path = _cloud_operation_path(resource_id)
@@ -1862,14 +1877,12 @@ def _compute_mutation(kind, action, resource_id):
         saved = {"kind": kind, "action": action, "resource_id": resource_id, "phase": "submitting"}
         _atomic_json(path, saved)
         try:
-            response = run_cli(["compute", kind, action, resource_id, "--async", "--format", "json"], timeout=90)
+            response = run_cli(["compute", kind, action, resource_id, "--async", "--format", "json"], timeout=90, parse_json=False)
         except NebiusError as error:
             if re.search(r"code = (InvalidArgument|PermissionDenied|Unauthenticated|FailedPrecondition|ResourceExhausted|NotFound)\b", str(error)):
                 path.unlink(missing_ok=True)
             raise
-        operation_id = response.get("id") if isinstance(response, dict) else response
-        if not isinstance(operation_id, str) or not operation_id:
-            raise NebiusError("Cloud submission returned no operation ID. Inspect the resource before retrying.")
+        operation_id = _compute_operation_id(response)
         saved.update(operation_id=operation_id, phase="running")
         _atomic_json(path, saved)
     if not saved.get("operation_id"):
