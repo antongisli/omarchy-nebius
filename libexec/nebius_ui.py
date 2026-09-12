@@ -27,6 +27,7 @@ from typing import Any
 import nebius_core as core
 import nebius_catalog as catalog
 import nebius_jobs as jobs
+import nebius_timing as timing
 import nebius_ports as ports
 import nebius_ssh as ssh_client
 import nebius_shortcuts as shortcuts
@@ -548,25 +549,19 @@ class App:
         bottom = self.frame(title, f"{spinner}  {elapsed // 60}:{elapsed % 60:02d} elapsed",
                             "Esc/B background (work continues)" if mutation else "Esc cancel this read")
         y = 7
-        for line in self.wrap(operation.get("message") or title):
+        for line in self.wrap(operation.get("message") or title)[:2]:
             self.put(y, 3, line, self.accent | curses.A_BOLD)
             y += 1
         if mutation:
-            stages = {"checking": 0, "project": 1, "network": 2, "disk": 1, "instance": 2, "boot": 3, "done": 4}
-            current = stages.get(operation.get("stage"), 0)
-            labels = ["Check request", "Create boot disk", "Create VM", "Wait for address", "VM running"]
-            if operation.get("stage") in {"project", "network"}:
-                labels = ["Check request", "Create project", "Wait for network", "Project ready"]
-            if operation.get("stage") in {"start", "stop", "delete"}:
-                labels = ["Send request", "Wait for Nebius", "Update overview"]
-                current = 1
-            y += 2
-            for index, label in enumerate(labels):
-                if y >= bottom:
-                    break
-                self.put(y, 3, ("✓ " if index < current else "› " if index == current else "  ") + label,
-                         self.accent if index == current else 0)
-                y += 2
+            self.put(5, 3, timing.headline(operation), self.accent | curses.A_BOLD)
+            y = min(y + 1, 9)
+            stage_lines = timing.lines(operation)
+            slots = max(1, bottom - y + 1)
+            if len(stage_lines) > slots:
+                stage_lines = ["Earlier stages saved in Activity"] + stage_lines[-max(1, slots - 1):]
+            for line in stage_lines[:slots]:
+                self.put(y, 3, line)
+                y += 1
         self.screen.refresh()
 
     def read(self, title, *arguments):
@@ -599,7 +594,10 @@ class App:
             if job.get("phase") in {"ready", "error"}:
                 if job["phase"] == "error":
                     operation = core._read_json(self.watched_operation, {}) if job.get("started_at") else {}
-                    self.message("Operation stopped", operation.get("message", job.get("error", "")) + "\n\n" + operation.get("recovery", ""),
+                    if job.get("command") in {"create", "start"} and operation.get("vm_id"):
+                        self.operation_result({**job, "operation": operation})
+                        raise Background()
+                    self.message("Operation stopped", operation.get("message", job.get("error", "")) + "\n\n" + timing.text(operation) + "\n\n" + operation.get("recovery", ""),
                                  details=job.get("error", ""), error=True)
                     raise Back()
                 return job.get("result", {})
@@ -848,13 +846,8 @@ class App:
                         continue
                     vm = self.mutate("Creating VM", "create", "--plan-id", plan["plan_id"])
                     created_vm = vm
-                    self.notice = f"{vm['name']} is running."
-                    result_notes = [f"Address: {vm.get('public_ip', '')}"]
-                    choice = self.menu("VM is running", [("Connect now", vm.get("public_ip", ""), "connect"),
-                                                         ("Back to overview", "Your VM is saved", "overview")],
-                                       subtitle=vm["name"], notes=result_notes)
-                    if choice == "connect":
-                        self.ssh({**vm, "managed": True, "ssh_user": core.SSH_USER})
+                    self.notice = f"{vm['name']} is ready for SSH. " + timing.headline(vm.get("launch_timing", {}))
+                    self.operation_result({"phase": "ready", "result": vm, "operation": vm.get("launch_timing", {})})
                     self.inventory = {}
                     raise Background()
                 except Back:
@@ -868,7 +861,54 @@ class App:
                         self.inventory = {}
                         raise Background()
 
+    def operation_result(self, job):
+        """A saved launch report stays open across SSH attempts and session exits."""
+        operation = job.get("operation") or {}
+        vm = dict(job.get("result") or {})
+        vm.setdefault("id", operation.get("vm_id"))
+        vm.setdefault("name", operation.get("name") or vm.get("id") or "VM")
+        vm.setdefault("ssh_user", operation.get("ssh_user"))
+        title = ("SSH ready" if operation.get("ssh_ready") else "Launch report") + " · " + vm["name"]
+        lines = timing.lines(operation) + ["", operation.get("message") or jobs.describe(job)["message"]]
+        if operation.get("recovery"):
+            lines += ["", operation["recovery"]]
+        lines += ["", "Saved: Activity or VM actions → Launch timings."]
+        offset = 0
+        while True:
+            footer = ("C SSH   " if vm.get("id") else "") + "↑↓ scroll   D details   Esc back"
+            bottom = self.frame(title, timing.headline(operation), footer)
+            content = self.wrap("\n".join(lines))
+            slots = max(1, bottom - 5)
+            offset = min(offset, max(0, len(content) - slots))
+            for y, line in enumerate(content[offset:offset + slots], 6):
+                self.put(y, 2, line)
+            self.screen.refresh()
+            key = self.key()
+            if key in ("\x1b", 27, "v", "V"):
+                return
+            if key in ("c", "C") and vm.get("id"):
+                try:
+                    self.ssh(vm)
+                except Back:
+                    pass
+            elif key in ("d", "D"):
+                self.message("Launch details", json.dumps(job, indent=2))
+            elif key in ("j", curses.KEY_DOWN):
+                offset += 1
+            elif key in ("k", curses.KEY_UP):
+                offset = max(0, offset - 1)
+            elif key in (curses.KEY_NPAGE, "\n", "\r"):
+                offset += slots
+            elif key == curses.KEY_PPAGE:
+                offset = max(0, offset - slots)
+
     def ssh(self, vm):
+        launch = jobs.latest_vm_job(vm["id"])
+        if launch and launch.get("phase") in {"queued", "running"}:
+            self.watch(launch["id"], "Waiting for SSH readiness · " + vm["name"])
+            self.operation_result(jobs.latest_vm_job(vm["id"]) or launch)
+            return
+        launch_operation = (launch or {}).get("operation") or vm.get("launch_timing") or {}
         username = vm.get("ssh_user") or "ubuntu"
         if not vm.get("ssh_user"):
             username = self.edit("SSH username", username,
@@ -883,7 +923,8 @@ class App:
                         if y < bottom:
                             self.put(y, 3, line)
                     self.screen.refresh()
-                ssh_client.wait_ready(connection, progress=progress, cancelled=lambda: self.key() in ("\x1b", 27))
+                if ssh_client.wait_ready(connection, progress=progress, cancelled=lambda: self.key() in ("\x1b", 27)) is not True:
+                    raise ssh_client.SSHError("SSH login has not been verified; no session was opened")
                 curses.def_prog_mode()
                 curses.endwin()
                 started = time.monotonic()
@@ -905,14 +946,21 @@ class App:
                 raise Back()
             except (ssh_client.SSHError, core.NebiusError, OSError) as error:
                 issue = str(error)
-            core._atomic_json(core.STATE_DIR / "ssh-last-error.json", {"vm_id": vm["id"], "name": vm["name"], "error": issue})
-            choice = self.menu("SSH did not connect", [("Retry connection", "Check login readiness and try again", "resume"),
-                                ("SSH username", username, "settings"), ("Back to VMs", "The VM is unchanged", "overview")],
-                               subtitle=vm["name"], notes=[issue])
-            if choice == "overview":
-                return
-            if choice == "settings":
-                username = self.edit("SSH username", username)
+            core._atomic_json(core.STATE_DIR / "ssh-last-error.json", {"vm_id": vm["id"], "name": vm["name"], "error": issue,
+                                                                             "launch_timing": launch_operation})
+            while True:
+                choice = self.menu("SSH did not connect", [("Retry connection", "Check login readiness and try again", "resume"),
+                                    ("SSH username", username, "settings"), ("Launch timings", timing.headline(launch_operation), "timings"),
+                                    ("Back to VMs", "The VM is unchanged", "overview")],
+                                   subtitle=vm["name"], notes=[issue, timing.headline(launch_operation)])
+                if choice == "overview":
+                    return
+                if choice == "timings":
+                    self.message("Launch timings", timing.text(launch_operation))
+                    continue
+                if choice == "settings":
+                    username = self.edit("SSH username", username)
+                break
 
     def activity(self):
         def rows():
@@ -932,9 +980,15 @@ class App:
                 continue
             if selected["phase"] in {"running", "queued"}:
                 self.watch(selected["id"], jobs.describe(selected)["title"])
+                completed = next((job for job in jobs.jobs() if job["id"] == selected["id"]), selected)
+                if completed.get("command") in {"create", "start"}:
+                    self.operation_result(completed)
             else:
                 operation = selected.get("operation", {})
                 view = jobs.describe(selected)
+                if selected.get("command") in {"create", "start"} and not jobs.can_resume(selected):
+                    self.operation_result(selected)
+                    continue
                 if jobs.can_resume(selected):
                     try:
                         action = self.menu(view["title"], [("Details", view["message"], "details"),
@@ -944,7 +998,7 @@ class App:
                     if action == "resume":
                         jobs.submit(selected["arguments"], view["title"])
                         continue
-                text = view["status"] + "\n" + view["message"]
+                text = view["status"] + "\n" + view["message"] + "\n\n" + timing.text(operation)
                 if operation.get("recovery"):
                     text += "\n\n" + operation["recovery"]
                 if selected.get("finished_at"):
@@ -1106,7 +1160,7 @@ class App:
             return
         rows = []
         if vm["state"] == "running":
-            rows += [("Connect over SSH", "Enter your running VM", "connect"), ("Stop VM", "Compute stops; disks remain billable", "stop")]
+            rows += [("Check SSH and connect", "Open a session only after login succeeds", "connect"), ("Stop VM", "Compute stops; disks remain billable", "stop")]
         elif vm["state"] == "stopped":
             rows += [("Start VM", "Resume billing and wait for its address", "start")]
         if not vm.get("instance_deleted"):
@@ -1115,6 +1169,7 @@ class App:
         rows = [(*row, "VM actions") for row in rows]
         if not vm.get("instance_deleted"):
             rows += [("Disks and storage", "Inspect attached disks and cleanup options", "storage", "Inspect")]
+        rows += [("Launch timings", "Saved stages and total time to SSH ready", "timings", "Inspect")]
         rows += [("Full details", "Resource identifiers and state", "details", "Inspect")]
         if vm.get("can_delete"):
             rows += [("Delete remaining boot disk" if vm.get("instance_deleted") else "Delete VM and boot disk",
@@ -1129,6 +1184,12 @@ class App:
             self.ssh(vm)
         elif action == "ports":
             self.ports(vm)
+        elif action == "timings":
+            launch = jobs.latest_vm_job(vm["id"])
+            if launch and launch.get("phase") in {"running", "queued"}:
+                self.watch(launch["id"], "Launch progress · " + vm["name"])
+                launch = jobs.latest_vm_job(vm["id"])
+            self.operation_result(launch or {"operation": vm.get("launch_timing", {}), "result": vm})
         elif action == "details":
             self.message("VM details", json.dumps(vm, indent=2))
         elif action == "storage":

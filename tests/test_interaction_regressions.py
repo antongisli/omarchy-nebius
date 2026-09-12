@@ -58,10 +58,11 @@ class SSHReadinessTests(unittest.TestCase):
             self.run_probe([(255, "REMOTE HOST IDENTIFICATION HAS CHANGED!")])
         self.assertEqual(self.clock, 0)
 
-    def test_existing_password_login_is_not_blocked_by_probe(self):
+    def test_existing_vm_still_requires_successful_authentication(self):
         self.connection["managed"] = False
-        result, _ = self.run_probe([(255, "Permission denied (publickey,password).")])
-        self.assertFalse(result)
+        result, process = self.run_probe([(255, "Permission denied (publickey,password)."), (0, "")])
+        self.assertTrue(result)
+        self.assertEqual(process.call_count, 2)
 
     def test_timeout_has_actionable_error(self):
         with self.assertRaisesRegex(ssh.SSHError, "VM is unchanged"):

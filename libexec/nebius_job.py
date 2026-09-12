@@ -50,7 +50,7 @@ def run_job():
         job = {
             **core._read_json(job_path, {}),
             "id": job_id, "pid": os.getpid(), "phase": "running", "command": arguments[0],
-            "started_at": dt.datetime.now(dt.timezone.utc).isoformat(), "arguments": arguments,
+            "started_at": core._read_json(job_path, {}).get("started_at") or dt.datetime.now(dt.timezone.utc).isoformat(), "arguments": arguments,
         }
         core._atomic_json(job_path, job)
         core._atomic_json(core.STATE_DIR / "active-job.json", job)

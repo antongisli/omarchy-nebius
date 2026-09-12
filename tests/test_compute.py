@@ -383,9 +383,12 @@ class ComputeTests(unittest.TestCase):
              patch.object(core, "preflight_vm", return_value=GOOD) as quota, patch.object(core, "ensure_ssh_key"), \
              patch.object(core, "_cloud_init", return_value="#cloud-config"), \
              patch.object(core, "validate_instance_request", return_value={"valid": True}) as validator, \
-             patch.object(core, "_wait_for_instance", return_value={"state": "running", "public_ip": "192.0.2.5"}):
+             patch.object(core, "_wait_for_instance", return_value={"state": "running", "public_ip": "192.0.2.5"}), \
+             patch.object(core, "_wait_for_vm_ssh") as readiness:
             result = core.create_gpu_vm(plan["plan_id"])
         self.assertEqual(result["disk_id"], old["disk_id"])
+        readiness.assert_called_once_with(result["id"], result["name"], core.SSH_USER)
+        self.assertTrue(result["ssh_ready"])
         self.assertFalse(any(args[:3] == ["compute", "disk", "create"] for args in calls))
         self.assertEqual(quota.call_args.kwargs["disk_gib"], 0)
         validator.assert_called_once()

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import curses
+import datetime as dt
+import time
 from html import escape
 from pathlib import Path
 import sys
@@ -91,6 +93,24 @@ def render(width=80, height=30, allocation="on_demand", surface="capacity"):
                      "local_port": 18000, "remote_port": 8000, "state": "Reconnecting", "url": "http://127.0.0.1:18000"},
                 ]):
                     app.ports()
+            elif surface in {"launch-ready", "launch-progress"}:
+                operation = {}
+                base = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=118.2)
+                for phase, stage, elapsed in [("running", "checking", 0), ("running", "preflight", 0.5),
+                        ("running", "disk", 4), ("running", "instance", 30), ("running", "boot", 80),
+                        ("running", "ssh", 100), ("ready", "done", 118.2)]:
+                    if surface == "launch-progress" and phase == "ready":
+                        break
+                    operation = {**ui.timing.advance(operation, phase, stage, (base + dt.timedelta(seconds=elapsed)).isoformat()),
+                                 "phase": phase, "stage": stage}
+                operation.update(name="training", vm_id="computeinstance-example",
+                                 message="SSH login verified" if surface == "launch-ready" else "Waiting for authenticated SSH login")
+                if surface == "launch-ready":
+                    operation["ssh_ready"] = True
+                    app.operation_result({"operation": operation, "result": {"id": "computeinstance-example", "name": "training"}})
+                else:
+                    with patch.object(ui.core, "_read_json", return_value=operation):
+                        app.progress("Creating VM · training", time.time() - 118.2, mutation=True)
             elif surface == "activity":
                 with patch.object(ui.jobs, "jobs", return_value=[
                     {"id": "demo1", "command": "delete", "title": "Delete VM · comfyui", "phase": "running",
@@ -158,7 +178,7 @@ if __name__ == "__main__":
     parser.add_argument("--width", type=int, default=80)
     parser.add_argument("--height", type=int, default=30)
     parser.add_argument("--allocation", choices=("on_demand", "preemptible"), default="on_demand")
-    parser.add_argument("--surface", choices=("cover", "capacity", "ports", "port-form", "activity", "overview", "vm-actions", "delete-review", "home", "shortcuts", "shortcuts-unset", "shortcut-form", "shortcut-error"), default="capacity")
+    parser.add_argument("--surface", choices=("cover", "capacity", "ports", "port-form", "launch-ready", "launch-progress", "activity", "overview", "vm-actions", "delete-review", "home", "shortcuts", "shortcuts-unset", "shortcut-form", "shortcut-error"), default="capacity")
     parser.add_argument("--output", type=Path, default=ROOT / "assets/terminal-preview.svg")
     args = parser.parse_args()
     target = args.output

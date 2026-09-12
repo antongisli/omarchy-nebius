@@ -59,9 +59,6 @@ def wait_ready(connection, *, progress=lambda message, elapsed: None, cancelled=
         if any(text in lower for text in ("host key verification failed", "identification has changed", "offending", "bad configuration")):
             raise SSHError(detail)
         denied = "permission denied" in lower
-        if denied and not connection.get("managed"):
-            # Existing VMs may intentionally use a password or interactive key.
-            return False
         retryable = denied or not detail or any(text in lower for text in (
             "connection refused", "timed out", "connection reset", "connection closed",
             "no route to host", "network is unreachable", "kex_exchange_identification"))

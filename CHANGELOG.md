@@ -2,6 +2,10 @@
 
 ## Unreleased · Image picker and GPU grouping
 
+- Launch/start now wait for verified SSH login. Stage durations and total time to
+  SSH ready remain on a saved result screen, including after connection attempts.
+  Activity and VM actions reopen the report; failed probes never open a session.
+
 - Deletion verifies your Nebius identity against VM creation audit history instead
   of requiring a local plugin record. Existing VMs remain deletable after reinstall;
   confirmation identifies the exact boot disk and secondary disks are kept.

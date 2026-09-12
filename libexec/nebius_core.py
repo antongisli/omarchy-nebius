@@ -278,18 +278,20 @@ def project_context(project_id: str | None = None, tenant_id: str | None = None)
 
 
 def _write_operation(phase: str, stage: str, message: str, **details: Any) -> None:
-    if os.environ.get("NEBIUS_JOB_ID") and "cloud_operations" not in details:
-        details["cloud_operations"] = current_operation().get("cloud_operations", [])
-    value = {
-            "schema": "nebius.omarchy-operation/v1",
-            "phase": phase,
-            "stage": stage,
-            "message": message,
-            "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-            **details,
-        }
-    _atomic_json(OPERATION_FILE, value)
+    import nebius_timing as timing
     job_id = os.environ.get("NEBIUS_JOB_ID", "")
+    previous = current_operation()
+    if not previous and re.fullmatch(r"[a-f0-9]{24}", job_id):
+        previous = {"started_at": _read_json(STATE_DIR / "jobs" / (job_id + ".json"), {}).get("started_at")}
+    if not job_id and phase == "running" and previous.get("phase") != "running":
+        previous = {}
+    if job_id and "cloud_operations" not in details:
+        details["cloud_operations"] = previous.get("cloud_operations", [])
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    value = {"schema": "nebius.omarchy-operation/v1", "phase": phase, "stage": stage,
+             "message": message, "updated_at": now, **details,
+             **timing.advance(previous, phase, stage, now)}
+    _atomic_json(OPERATION_FILE, value)
     if re.fullmatch(r"[a-f0-9]{24}", job_id):
         _atomic_json(STATE_DIR / "jobs" / (job_id + ".operation.json"), value)
 
@@ -1529,6 +1531,26 @@ def _wait_for_instance(vm_id: str, *, timeout: int = 720) -> dict[str, Any]:
     raise NebiusError(f"VM did not become reachable within {timeout} seconds (last state: {last_state})")
 
 
+def _wait_for_vm_ssh(vm_id: str, name: str, username: str | None = None) -> None:
+    import nebius_ssh as ssh_client
+    details = {"vm_id": vm_id, "name": name, "ssh_user": username}
+    _write_operation("running", "ssh", "VM is running; waiting for authenticated SSH login", **details)
+    last_update = -2
+    def progress(message, elapsed):
+        nonlocal last_update
+        if elapsed - last_update >= 2:
+            _write_operation("running", "ssh", message, **details)
+            last_update = elapsed
+    try:
+        connection = connect_vm(vm_id, launch=False, username=username)
+        if ssh_client.wait_ready(connection, progress=progress) is not True:
+            raise ssh_client.SSHError("SSH login has not been verified")
+    except (ssh_client.SSHError, NebiusError, OSError) as error:
+        _write_operation("error", "ssh", "VM is running, but SSH login is not ready", **details,
+                         details=str(error), recovery="The VM exists. Check its SSH username, key and network, then retry SSH. Do not create another VM.")
+        raise NebiusError("VM is running, but SSH login is not ready: " + str(error)) from error
+
+
 @cloud_mutation
 def create_gpu_vm(plan_id: str, *, dry_run: bool = False) -> dict[str, Any]:
     if not re.fullmatch(r"[A-Za-z0-9_-]{20,40}", plan_id):
@@ -1692,10 +1714,12 @@ def create_gpu_vm(plan_id: str, *, dry_run: bool = False) -> dict[str, Any]:
         raise
     vm.update(ready)
     _update_vm_record(vm_id, vm)
+    _wait_for_vm_ssh(vm_id, vm["name"], vm.get("ssh_user"))
     _write_operation(
         "ready",
         "done",
-        "VM is running; SSH login is checked when you connect",
+        "SSH login verified; your VM is ready",
+        ssh_ready=True,
         name=vm["name"],
         vm_id=vm_id,
         disk_id=disk_id,
@@ -1704,6 +1728,8 @@ def create_gpu_vm(plan_id: str, *, dry_run: bool = False) -> dict[str, Any]:
         platform=plan["platform"],
         preset=plan["preset"],
     )
+    vm.update(ssh_ready=True, launch_timing=current_operation())
+    _update_vm_record(vm_id, vm)
     try:
         plan_path.unlink()
     except FileNotFoundError:
@@ -1986,9 +2012,12 @@ def start_vm(vm_id: str) -> dict[str, Any]:
     _, vm = _accessible_vm(vm_id)
     _write_operation("running", "start", f"Starting {vm['name']}", vm_id=vm_id)
     _compute_mutation("instance", "start", vm_id)
+    _write_operation("running", "boot", "VM started; waiting for its address", vm_id=vm_id, name=vm["name"])
     ready = _wait_for_instance(vm_id)
-    _write_operation("ready", "start", f"{vm['name']} is running", vm_id=vm_id)
-    return {"id": vm_id, "name": vm.get("name"), **ready}
+    _wait_for_vm_ssh(vm_id, vm["name"], vm.get("ssh_user"))
+    _write_operation("ready", "done", f"{vm['name']} is ready for SSH", vm_id=vm_id, name=vm["name"], ssh_ready=True)
+    return {"id": vm_id, "name": vm.get("name"), "ssh_user": vm.get("ssh_user"), **ready,
+            "ssh_ready": True, "launch_timing": current_operation()}
 
 
 @cloud_mutation
