@@ -81,14 +81,27 @@ _mutation_state = threading.local()
 
 
 @contextlib.contextmanager
+def installation_guard():
+    """Keep uninstall from discarding state while an operation is using it."""
+    if not Path(__file__).exists():
+        raise NebiusError("The Nebius plugin was removed. Close this old session.")
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with (STATE_DIR / "uninstall.lock").open("a") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise NebiusError("Nebius is being uninstalled. Wait for removal to finish.") from error
+        yield
+
+
+@contextlib.contextmanager
 def mutation_guard(*, wait=False, resource="global"):
     owned = getattr(_mutation_state, "owned", set())
     if resource in owned:
         yield
         return
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
     name = "mutation.lock" if resource == "global" else "mutation-" + hashlib.sha256(resource.encode()).hexdigest() + ".lock"
-    with (STATE_DIR / name).open("a") as handle:
+    with installation_guard(), (STATE_DIR / name).open("a") as handle:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
         except BlockingIOError as error:

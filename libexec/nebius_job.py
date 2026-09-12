@@ -15,6 +15,15 @@ import nebius_core as core
 
 
 def main():
+    try:
+        with core.installation_guard():
+            return run_job()
+    except core.NebiusError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+
+
+def run_job():
     job_id, *arguments = sys.argv[1:]
     if not re.fullmatch(r"[a-f0-9]{24}", job_id) or not arguments or arguments[0] not in {
         "create", "create-project", "start", "stop", "delete", "delete-disk", "recover", "archive-request", "repair-rejected"

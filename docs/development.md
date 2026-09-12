@@ -56,6 +56,14 @@ For a narrow-terminal check without Qt, run `python3 tools/render_preview.py --s
 
 ### Release checks
 
+Marketplace gate: verify both `U · Uninstall Nebius plugin` and agent removal, plus native `omarchy plugin remove` on a host with the cleanup hook. Omarchy 4.0.2 lacks that hook; a local plugin change does not fix its generic command. Do not publish a claim of complete native removal until the upstream change ships and removal/reinstall has been checked.
+
+Optional Linux cross-repository test (real Omarchy remove command and Nebius scripts, temporary home and fake IPC/services):
+
+```bash
+NEBIUS_TEST_OMARCHY_SOURCE=/path/to/omarchy-with-cleanup-hook python3 -m unittest discover -s tests -p test_omarchy_cleanup.py -v
+```
+
 1. Run the suite, shell syntax checks, Omarchy manifest validation and offscreen widget checks.
 2. Verify setup with no CLI, a matching borrowed CLI, another CLI version, a failed checksum and repair/reinstall. Installer-stage tests isolate these cases without changing the account.
 3. Rebuild screenshots and check README links, version metadata, dependency pins and removal instructions.

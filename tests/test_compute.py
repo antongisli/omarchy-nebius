@@ -121,7 +121,15 @@ class ComputeTests(unittest.TestCase):
             with core.mutation_guard():
                 with core.mutation_guard():
                     pass
-            self.assertEqual(lock.call_count, 1)
+            self.assertEqual([call.args[1] for call in lock.call_args_list],
+                             [fcntl.LOCK_SH | fcntl.LOCK_NB, fcntl.LOCK_EX | fcntl.LOCK_NB])
+
+    def test_uninstall_lock_blocks_new_cloud_mutations(self):
+        with (core.STATE_DIR / "uninstall.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(core.NebiusError, "being uninstalled"):
+                with core.mutation_guard():
+                    self.fail("a cloud mutation entered during uninstall")
 
     def test_create_rechecks_quota_before_creating_disk(self):
         plan = self.plan()

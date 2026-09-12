@@ -9,6 +9,11 @@ import stat
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "libexec"))
+import nebius_uninstall as removal
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +26,15 @@ class UninstallTests(unittest.TestCase):
         environment["XDG_CACHE_HOME"] = str(home / ".cache")
         if path:
             environment["PATH"] = path
+            fake_bin = Path(path.split(os.pathsep)[0])
+            if not (fake_bin / "omarchy-shell").exists():
+                self.write_command(fake_bin / "omarchy-shell", '''#!/bin/sh
+if [ -d "$HOME/.config/omarchy/plugins/nebius" ]; then
+  printf '%s\\n' '[{"id":"nebius","enabled":false,"active":false}]'
+else
+  printf '[]\\n'
+fi
+''')
         return subprocess.run([str(UNINSTALL), *arguments], text=True, capture_output=True, env=environment)
 
     def test_dry_run_warns_and_changes_nothing(self):
@@ -36,7 +50,7 @@ class UninstallTests(unittest.TestCase):
             self.assertIn("may continue to incur charges", result.stdout)
             self.assertTrue(marker.exists())
 
-    def test_yes_removes_local_setup_but_not_cloud_marker(self):
+    def test_explicit_removal_cleans_local_setup_but_not_cloud_marker(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             fake_bin = home / "fake-bin"
@@ -80,6 +94,7 @@ class UninstallTests(unittest.TestCase):
 
             self.write_command(fake_bin / "codex", f'''#!/bin/sh
 if [ "$1 $2" = "mcp get" ]; then
+  [ ! -e "{calls}/mcp-removed" ] || exit 1
   printf '%s\\n' '{{"command":"python3","args":["{plugin}/libexec/nebius_agent_mcp.py"]}}'
 elif [ "$1 $2" = "mcp remove" ]; then
   : >"{calls}/mcp-removed"
@@ -97,24 +112,26 @@ fi
             self.write_command(fake_bin / "claude", f'''#!/bin/sh
 if [ "$1 $2 $3 $4" = "mcp remove nebius --scope" ] && [ "$5" = "user" ]; then
   : >"{calls}/claude-mcp-removed"
+  printf '%s\\n' '{{"mcpServers":{{}}}}' >"$HOME/.claude.json"
 fi
 ''')
             self.write_command(nebius_dir / "nebius", f'''#!/bin/sh
 case "$1 $2" in
   "profile list") printf '%s\\n' 'keep [default]' 'omarchy-nebius-mcp' ;;
   "profile active") printf '%s\\n' keep ;;
-  "profile delete") : >"{calls}/profile-deleted" ;;
+  "profile delete") : >"{calls}/profile-deleted"; printf 'default: keep\\nprofiles:\\n    keep:\\n' >"$HOME/.nebius/config.yaml" ;;
 esac
 ''')
             self.write_command(fake_bin / "pacman", "#!/bin/sh\nexit 1\n")
             self.write_command(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
             self.write_command(fake_bin / "hyprctl", "#!/bin/sh\nexit 0\n")
             self.write_command(fake_bin / "omarchy", f'''#!/bin/sh
+[ "$3" != "--help" ] || exit 0
 rm -rf -- "{plugin}"
 printf '%s\\n' 'Removed nebius.'
 ''')
 
-            result = self.run_uninstall(home, "--yes", path=str(fake_bin) + os.pathsep + os.environ["PATH"])
+            result = self.run_uninstall(home, "--yes", "--remove-ssh-key", path=str(fake_bin) + os.pathsep + os.environ["PATH"])
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse(plugin.exists())
             self.assertFalse(state_dir.exists())
@@ -156,6 +173,7 @@ printf '%s\\n' 'Removed nebius.'
             self.write_command(fake_bin / "pacman", "#!/bin/sh\nexit 1\n")
             self.write_command(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
             self.write_command(fake_bin / "omarchy", f'''#!/bin/sh
+[ "$3" != "--help" ] || exit 0
 rm -rf -- "{plugin}"
 printf '%s\\n' 'Removed nebius.'
 ''')
@@ -190,6 +208,7 @@ printf '%s\\n' 'Removed nebius.'
             self.write_command(fake_bin / "pacman", "#!/bin/sh\nexit 1\n")
             self.write_command(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
             self.write_command(fake_bin / "omarchy", f'''#!/bin/sh
+[ "$3" != "--help" ] || exit 0
 rm -rf -- "{plugin}"
 printf '%s\\n' 'Removed nebius.'
 ''')
@@ -202,6 +221,147 @@ printf '%s\\n' 'Removed nebius.'
     def write_command(path: Path, contents: str):
         path.write_text(contents)
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+    def fixture(self, home):
+        fake_bin = home / "fake-bin"
+        fake_bin.mkdir()
+        plugin = home / ".config/omarchy/plugins/nebius"
+        plugin.mkdir(parents=True)
+        state = home / ".state/nebius"
+        state.mkdir(parents=True)
+        (state / "keep").write_text("recovery record")
+        key = home / ".ssh/nebius-ed25519"
+        key.parent.mkdir()
+        key.write_text("keep access")
+        self.write_command(fake_bin / "codex", "#!/bin/sh\nexit 1\n")
+        self.write_command(fake_bin / "pacman", "#!/bin/sh\nexit 1\n")
+        self.write_command(fake_bin / "flock", "#!/bin/sh\nexit 0\n")
+        self.write_command(fake_bin / "omarchy", '''#!/bin/sh
+case "$2 $3" in
+  "remove --help") echo '--skip-cleanup'; exit 0 ;;
+  "remove nebius") rm -rf -- "$HOME/.config/omarchy/plugins/nebius" ;;
+esac
+''')
+        return fake_bin, plugin, state, key
+
+    def test_unavailable_shell_preserves_all_setup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            fake_bin, plugin, state, key = self.fixture(home)
+            self.write_command(fake_bin / "omarchy-shell", "#!/bin/sh\necho 'OMARCHY_PATH is not set' >&2\nexit 1\n")
+            result = self.run_uninstall(home, "--yes", path=str(fake_bin) + os.pathsep + os.environ["PATH"])
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Nothing was removed", result.stderr)
+            self.assertTrue(plugin.exists())
+            self.assertTrue((state / "keep").exists())
+            self.assertTrue(key.exists())
+
+    def test_yes_defaults_to_keeping_access_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            fake_bin, plugin, state, key = self.fixture(home)
+            result = self.run_uninstall(home, "--yes", path=str(fake_bin) + os.pathsep + os.environ["PATH"])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(key.exists())
+            self.assertFalse(plugin.exists())
+            self.assertFalse(state.exists())
+
+    def test_false_success_from_omarchy_preserves_cleanup_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            fake_bin, plugin, state, key = self.fixture(home)
+            self.write_command(fake_bin / "omarchy", "#!/bin/sh\necho 'Removed nebius.'\n")
+            result = self.run_uninstall(home, "--yes", path=str(fake_bin) + os.pathsep + os.environ["PATH"])
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("left the plugin directory", result.stderr)
+            self.assertTrue((state / "keep").exists())
+            self.assertTrue(key.exists())
+
+    def test_widget_must_be_unloaded_before_local_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            fake_bin, plugin, state, key = self.fixture(home)
+            self.write_command(fake_bin / "omarchy-shell", '''#!/bin/sh
+echo '[{"id":"nebius","enabled":true,"active":true}]'
+''')
+            result = self.run_uninstall(home, "--yes", path=str(fake_bin) + os.pathsep + os.environ["PATH"])
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("widget is still enabled", result.stderr)
+            self.assertTrue((state / "keep").exists())
+
+    def test_check_is_read_only_and_does_not_claim_uninstall(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            fake_bin, plugin, state, key = self.fixture(home)
+            result = self.run_uninstall(home, "--check", path=str(fake_bin) + os.pathsep + os.environ["PATH"])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("preflight passed", result.stdout)
+            self.assertTrue(plugin.exists())
+            self.assertEqual(sorted(p.name for p in state.iterdir()), ["keep"])
+
+    def test_cleanup_hook_leaves_plugin_removal_to_host(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            fake_bin, plugin, state, key = self.fixture(home)
+            with mock.patch.dict(os.environ, {"OMARCHY_PLUGIN_REMOVAL_ID": "nebius", "OMARCHY_PLUGIN_DIR": str(plugin)}):
+                result = self.run_uninstall(home, "--from-omarchy", "--yes", path=str(fake_bin) + os.pathsep + os.environ["PATH"])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(plugin.exists())
+            self.assertFalse(state.exists())
+            self.assertIn("Omarchy will now remove", result.stdout)
+            self.assertNotIn("Local Nebius plugin setup removed.", result.stdout)
+
+
+class AgentUninstallTests(unittest.TestCase):
+    def test_missing_agent_cli_cannot_silently_leave_owned_registration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            config = home / ".codex/config.toml"
+            config.parent.mkdir()
+            expected = str(home / ".config/omarchy/plugins/nebius/libexec/nebius_agent_mcp.py")
+            config.write_text('[mcp_servers.nebius]\ncommand = "python3"\nargs = ' + json.dumps([expected]) + '\n')
+            with mock.patch.object(removal.Path, "home", return_value=home), mock.patch.object(removal.shutil, "which", return_value=None):
+                with self.assertRaisesRegex(removal.UninstallError, "CLI is unavailable"):
+                    removal.check_agent_configs()
+                with self.assertRaisesRegex(removal.UninstallError, "still has"):
+                    removal.check_agent_configs(verify=True)
+
+    def test_unrelated_agent_registration_is_not_claimed_or_removed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            config = home / ".claude.json"
+            original = json.dumps({"mcpServers": {"nebius": {"command": "other", "args": []}}})
+            config.write_text(original)
+            with mock.patch.object(removal.Path, "home", return_value=home):
+                removal.check_agent_configs(verify=True)
+            self.assertEqual(config.read_text(), original)
+
+    def test_plan_checks_without_removing(self):
+        with mock.patch.object(removal, "_run", return_value=subprocess.CompletedProcess([], 0, "Ready", "")) as run:
+            self.assertTrue(removal.plan()["ready"])
+        self.assertEqual(run.call_args.args, (["--check"], 30))
+
+    def test_confirmation_and_explicit_choices_are_required(self):
+        with mock.patch.object(removal, "_run") as run:
+            for value in (False, "true", 1, None):
+                with self.assertRaises(removal.UninstallError):
+                    removal.uninstall(confirmed=value, keep_cli=True, keep_ssh_key=True, keep_uv=True)
+            with self.assertRaises(removal.UninstallError):
+                removal.uninstall(confirmed=True, keep_cli=True, keep_ssh_key="false", keep_uv=True)
+            run.assert_not_called()
+
+    def test_agent_and_panel_share_the_same_uninstaller(self):
+        with mock.patch.object(removal, "_run", return_value=subprocess.CompletedProcess([], 0, "Local Nebius plugin setup removed.", "")) as run:
+            result = removal.uninstall(confirmed=True, keep_cli=True, keep_ssh_key=True, keep_uv=True)
+        self.assertEqual(result["status"], "removed")
+        self.assertEqual(run.call_args.args[0], ["--yes", "--keep-cli", "--keep-ssh-key", "--keep-uv"])
+        self.assertFalse(result["cloud_resources_changed"])
+
+    def test_failed_or_unverified_removal_never_reports_success(self):
+        for code, output in ((1, "Failed"), (0, "Uninstall cancelled")):
+            with mock.patch.object(removal, "_run", return_value=subprocess.CompletedProcess([], code, output, "")):
+                with self.assertRaisesRegex(removal.UninstallError, "Do not report success"):
+                    removal.uninstall(confirmed=True, keep_cli=True, keep_ssh_key=True, keep_uv=True)
 
 
 if __name__ == "__main__":

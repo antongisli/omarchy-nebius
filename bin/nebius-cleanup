@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+
+# Omarchy owns plugin file removal; the shared uninstaller owns local setup.
+set -Eeuo pipefail
+exec "$(dirname -- "${BASH_SOURCE[0]}")/nebius-uninstall" --from-omarchy "$@"

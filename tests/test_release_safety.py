@@ -103,7 +103,7 @@ curl() {
         self.assertEqual(self.install_stage().returncode, 0)
         self.legacy.write_text("user CLI must remain")
         source = (ROOT / "bin/nebius-uninstall").read_text()
-        stage = 'if [[ $cli_policy == "remove"' + source.split('if [[ $cli_policy == "remove"', 1)[1].split('\nports_unit=', 1)[0]
+        stage = 'if [[ $cli_policy == "remove"' + source.split('if [[ $cli_policy == "remove"', 1)[1].split('\nstage="removing the Omarchy plugin"', 1)[0]
         result = subprocess.run(["bash", "-ec", stage], env={**os.environ,
             "cli_policy": "remove", "cli_owned": "true", "owned_cli": str(self.private),
             "CLI_SHA256": self.digest, "CLI_SHA256_ARM64": self.digest}, capture_output=True, timeout=10)

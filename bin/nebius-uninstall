@@ -11,6 +11,7 @@ readonly MCP_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/nebius/uv"
 readonly RECEIPT="$STATE_DIR/install-receipt.json"
 readonly SETUP_LOG="$STATE_DIR/setup.log"
 readonly RUNTIME="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../libexec" && pwd)/nebius_runtime.py"
+readonly CLEANUP_HELPER="$(dirname -- "$RUNTIME")/nebius_uninstall.py"
 readonly CLI="$(python3 "$RUNTIME")"
 readonly PRIVATE_CLI="$(python3 "$RUNTIME" private-cli)"
 readonly CLI_CREDENTIALS="$HOME/.nebius/credentials.yaml"
@@ -23,26 +24,46 @@ readonly END_MARKER="-- <<< independent Nebius plugin shortcuts <<<"
 
 assume_yes=false
 dry_run=false
+check_only=false
+from_omarchy=false
 cli_policy="ask"
 ssh_key_policy="ask"
+uv_policy="ask"
+stage="preflight"
+
+fail() { printf '\n  Uninstall incomplete: %s\n' "$*" >&2; exit 1; }
+cancel() {
+  printf '\n  Uninstall cancelled.\n'
+  if [[ $from_omarchy == true ]]; then exit 1; else exit 0; fi
+}
+trap 'printf "\n  Uninstall incomplete during %s. Fix the error and rerun this uninstaller.\n  Cloud resources were not changed.\n" "$stage" >&2' ERR
 
 usage() {
-  printf 'Usage: %s [--yes] [--dry-run] [--keep-cli|--remove-cli] [--keep-ssh-key|--remove-ssh-key]\n' "$0"
+  printf 'Usage: %s [--yes] [--dry-run|--check] [--keep-cli|--remove-cli] [--keep-ssh-key|--remove-ssh-key] [--keep-uv|--remove-uv]\n' "$0"
+  printf 'Non-interactive --yes keeps the CLI, SSH key and shared uv package unless explicitly requested otherwise.\n'
 }
 
 while (( $# > 0 )); do
   case "$1" in
     --yes|-y) assume_yes=true ;;
     --dry-run) dry_run=true ;;
+    --check) check_only=true ;;
+    --from-omarchy) from_omarchy=true ;;
     --keep-cli) cli_policy="keep" ;;
     --remove-cli) cli_policy="remove" ;;
     --keep-ssh-key) ssh_key_policy="keep" ;;
     --remove-ssh-key) ssh_key_policy="remove" ;;
+    --keep-uv) uv_policy="keep" ;;
+    --remove-uv) uv_policy="remove" ;;
     --help|-h) usage; exit 0 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
   shift
 done
+
+if [[ $from_omarchy == true && ( ${OMARCHY_PLUGIN_REMOVAL_ID:-} != "$PLUGIN_ID" || ${OMARCHY_PLUGIN_DIR:-} != "$PLUGIN_DIR" ) ]]; then
+  fail "The cleanup-only entry point must be invoked by Omarchy for this plugin."
+fi
 
 owned() {
   local key="$1"
@@ -74,7 +95,7 @@ printf '    • Local setup history and MCP cache\n'
 printf '    • Dedicated Nebius profile and browser token\n'
 printf '    • Codex and Claude Code MCP registrations\n'
 printf '    • Plugin shortcuts\n'
-if [[ $uv_owned == true ]]; then printf '    • uv installed by this plugin (sudo may ask for your password)\n'; fi
+if [[ $uv_owned == true ]]; then printf '    • Optional: uv installed by this plugin (other apps may now use it)\n'; fi
 if [[ $cli_owned == true && -x $owned_cli ]]; then
   printf '\n  You can keep or remove the Nebius CLI.\n'
   printf '  Keeping it makes reinstall faster; removing it repeats CLI setup.\n'
@@ -94,9 +115,50 @@ if [[ $dry_run == true ]]; then
   exit 0
 fi
 
+# Agent/SSH shells do not necessarily inherit the graphical session's path.
+# Only use known Omarchy locations, and verify IPC before removing anything.
+if [[ -z ${OMARCHY_PATH:-} ]]; then
+  for omarchy_path in /usr/share/omarchy "$HOME/.local/share/omarchy"; do
+    if [[ -f $omarchy_path/shell/shell.qml ]]; then
+      export OMARCHY_PATH="$omarchy_path"
+      break
+    fi
+  done
+fi
+for dependency in python3 jq flock omarchy omarchy-shell; do
+  command -v "$dependency" >/dev/null || fail "Missing $dependency. Restore it before uninstalling. Nothing was removed."
+done
+for cleanup_path in "$STATE_DIR" "$MCP_CACHE" "$PLUGIN_DIR"; do
+  [[ ! -L $cleanup_path ]] || fail "Refusing cleanup through a symlink: $cleanup_path"
+done
+shell_plugins=$(omarchy-shell shell listPlugins) || fail "Cannot reach the Omarchy shell. Run from your logged-in desktop, then retry. Nothing was removed."
+jq -e 'type == "array"' >/dev/null <<<"$shell_plugins" || fail "Invalid Omarchy plugin status. Nothing was removed."
+if [[ -f $RECEIPT ]]; then
+  jq -e 'type == "object" and (.owned | type == "object")' "$RECEIPT" >/dev/null || fail "The install receipt is invalid. Repair setup before uninstalling."
+fi
+ports_unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/nebius-ports.service"
+if [[ -f $ports_unit ]]; then
+  systemctl --user show-environment >/dev/null || fail "Cannot reach your systemd user session. Nothing was removed."
+fi
+python3 "$CLEANUP_HELPER" check-agents
+if [[ -f $HOME/.nebius/config.yaml ]] && grep -Eq '^    omarchy-nebius-mcp:[[:space:]]*$' "$HOME/.nebius/config.yaml"; then
+  [[ -x $CLI ]] || fail "The dedicated profile remains but its CLI is missing. Restore the Nebius CLI before uninstalling. Nothing was removed."
+  profile_list=$("$CLI" profile list) || fail "Cannot inspect local Nebius profiles. Repair the CLI before uninstalling. Nothing was removed."
+  sed -E 's/[[:space:]]+\[default\]$//' <<<"$profile_list" | grep -Fxq "$PROFILE_NAME" ||
+    fail "Nebius profile configuration is inconsistent. Repair it before uninstalling."
+fi
+if [[ $uv_policy == "remove" && $uv_owned == true && ! -t 0 ]]; then
+  fail "Removing the shared uv package requires a visible terminal. Use U in the Nebius panel, or keep uv. Nothing was removed."
+fi
+if [[ $check_only == true ]]; then
+  printf '\n  Uninstall preflight passed. Nothing was changed.\n'
+  exit 0
+fi
+
 if [[ $assume_yes == true ]]; then
-  [[ $cli_policy == "ask" ]] && cli_policy="remove"
-  [[ $ssh_key_policy == "ask" ]] && ssh_key_policy="remove"
+  [[ $cli_policy == "ask" ]] && cli_policy="keep"
+  [[ $ssh_key_policy == "ask" ]] && ssh_key_policy="keep"
+  [[ $uv_policy == "ask" ]] && uv_policy="keep"
 else
   if [[ ! -t 0 || ! -t 1 ]]; then
     printf 'Refusing non-interactive uninstall without --yes.\n' >&2
@@ -107,7 +169,7 @@ else
     cli_choice=$(printf '%s\n%s\n' \
       "Keep Nebius CLI — reinstall will reuse it" \
       "Remove Nebius CLI — reinstall will download it again" | gum choose \
-      --header="Keep the Nebius CLI?") || exit 0
+      --header="Keep the Nebius CLI?") || cancel
     [[ $cli_choice == Remove* ]] && cli_policy="remove" || cli_policy="keep"
   fi
   [[ $cli_policy == "ask" ]] && cli_policy="keep"
@@ -116,17 +178,26 @@ else
     ssh_choice=$(printf '%s\n%s\n' \
       "Keep SSH key — preserve access to existing VMs" \
       "Remove SSH key — existing VMs may become inaccessible" | gum choose \
-      --header="Keep the dedicated SSH key?") || exit 0
+      --header="Keep the dedicated SSH key?") || cancel
     [[ $ssh_choice == Remove* ]] && ssh_key_policy="remove" || ssh_key_policy="keep"
   fi
   [[ $ssh_key_policy == "ask" ]] && ssh_key_policy="keep"
 
+  if [[ $uv_policy == "ask" && $uv_owned == true ]]; then
+    uv_choice=$(printf '%s\n%s\n' \
+      "Keep uv — other applications may use it" \
+      "Remove uv — the package manager may ask for your password" | gum choose \
+      --header="Keep the shared uv runtime?") || cancel
+    [[ $uv_choice == Remove* ]] && uv_policy="remove" || uv_policy="keep"
+  fi
+  [[ $uv_policy == "ask" ]] && uv_policy="keep"
+
   choice=$(printf '%s\n%s\n' "Cancel" "Remove local setup and plugin" | gum choose \
     --header="Cloud resources will remain and may keep costing money" \
-    --cursor-prefix="› " --selected-prefix="✓ ") || exit 0
+    --cursor-prefix="› " --selected-prefix="✓ ") || cancel
   if [[ $choice != "Remove local setup and plugin" ]]; then
     printf '\n  Uninstall cancelled. Nothing was changed.\n'
-    exit 0
+    cancel
   fi
 fi
 
@@ -137,18 +208,51 @@ if ! flock -n 9; then
   exit 1
 fi
 
+# Do not discard the recovery records of an operation that is still running.
+exec 8>"$STATE_DIR/setup.lock"
+flock -n 8 || fail "Setup is still running. Wait for it to finish, then retry."
+for operation_lock in "$STATE_DIR"/mutation*.lock "$STATE_DIR"/job-*.lock; do
+  [[ -f $operation_lock ]] || continue
+  flock -n "$operation_lock" true || fail "An operation is still running. Wait for Activity to finish, then retry."
+done
+
 # Remove a system package first so a cancelled sudo prompt leaves all other
 # setup intact and the user can simply retry.
-if [[ $uv_owned == true ]] && pacman -Q uv >/dev/null 2>&1; then
+stage="removing the optional runtime"
+if [[ $uv_policy == "remove" && $uv_owned == true ]] && pacman -Q uv >/dev/null 2>&1; then
   omarchy-pkg-drop uv
 fi
 
+stage="unloading the widget"
+if jq -e --arg id "$PLUGIN_ID" 'any(.[]; .id == $id and .enabled == true)' >/dev/null <<<"$shell_plugins"; then
+  omarchy plugin disable "$PLUGIN_ID"
+fi
+shell_plugins=$(omarchy-shell shell listPlugins)
+jq -e --arg id "$PLUGIN_ID" 'type == "array" and all(.[]; .id != $id or (.enabled != true and .active != true))' \
+  >/dev/null <<<"$shell_plugins" || fail "The widget is still enabled or loaded. Local setup was preserved; retry removal."
+
+stage="stopping SSH port forwards"
+if [[ -f $ports_unit ]]; then
+  systemctl --user disable --now nebius-ports.service
+  if systemctl --user is-active --quiet nebius-ports.service; then
+    fail "SSH port forwarding is still running. Local setup was preserved."
+  fi
+  rm -f -- "$ports_unit"
+  systemctl --user daemon-reload
+fi
+
+stage="removing agent registrations and credentials"
 if command -v codex >/dev/null 2>&1; then
   mcp_json=$(codex mcp get "$SERVER_NAME" --json 2>/dev/null || true)
   if jq -e --arg path "$PLUGIN_DIR/libexec/nebius_agent_mcp.py" \
       '(.transport.command // .command) == "python3" and (.transport.args // .args) == [$path]' \
       >/dev/null 2>&1 <<<"$mcp_json"; then
     codex mcp remove "$SERVER_NAME" >/dev/null
+    remaining_mcp=$(codex mcp get "$SERVER_NAME" --json 2>/dev/null || true)
+    if jq -e --arg path "$PLUGIN_DIR/libexec/nebius_agent_mcp.py" \
+        '(.transport.args // .args) == [$path]' >/dev/null 2>&1 <<<"$remaining_mcp"; then
+      fail "Codex still has this plugin's MCP registration. Retry removal."
+    fi
   fi
 fi
 
@@ -158,8 +262,13 @@ if command -v claude >/dev/null 2>&1 && [[ -f $HOME/.claude.json ]]; then
       '.type == "stdio" and .command == "python3" and .args == [$path]' \
       >/dev/null 2>&1 <<<"$claude_mcp"; then
     claude mcp remove "$SERVER_NAME" --scope user >/dev/null
+    if jq -e --arg path "$PLUGIN_DIR/libexec/nebius_agent_mcp.py" \
+        '.mcpServers.nebius.args == [$path]' "$HOME/.claude.json" >/dev/null 2>&1; then
+      fail "Claude Code still has this plugin's MCP registration. Retry removal."
+    fi
   fi
 fi
+python3 "$CLEANUP_HELPER" verify-agents
 
 if [[ -x $CLI ]] && "$CLI" profile list 2>/dev/null | sed -E 's/[[:space:]]+\[default\]$//' | grep -Fxq "$PROFILE_NAME"; then
   active=$($CLI profile active 2>/dev/null || true)
@@ -168,15 +277,20 @@ if [[ -x $CLI ]] && "$CLI" profile list 2>/dev/null | sed -E 's/[[:space:]]+\[de
     if [[ -n $replacement ]]; then
       "$CLI" profile activate "$replacement" >/dev/null
     else
-      # These files contain only the dedicated profile when it is the sole
-      # profile, so deleting them removes its config and browser token.
-      rm -f "$HOME/.nebius/config.yaml" "$HOME/.nebius/credentials.yaml"
+      # Preserve other cached credential entries even when their profiles have
+      # already been removed. The exact plugin token is removed below.
+      rm -f "$HOME/.nebius/config.yaml"
     fi
   fi
   if [[ -f $HOME/.nebius/config.yaml ]] && "$CLI" profile list 2>/dev/null \
       | sed -E 's/[[:space:]]+\[default\]$//' | grep -Fxq "$PROFILE_NAME"; then
     "$CLI" profile delete "$PROFILE_NAME" >/dev/null
   fi
+fi
+
+# Missing/broken CLIs must not turn a skipped profile cleanup into success.
+if [[ -f $HOME/.nebius/config.yaml ]] && grep -Eq '^    omarchy-nebius-mcp:[[:space:]]*$' "$HOME/.nebius/config.yaml"; then
+  fail "The dedicated Nebius profile remains. Restore the Nebius CLI and retry; plugin files were kept."
 fi
 
 # Nebius CLI profile deletion removes profile configuration but currently leaves
@@ -236,26 +350,47 @@ if [[ $cli_policy == "remove" && $cli_owned == true && -x $owned_cli ]]; then
   fi
 fi
 
-ports_unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/nebius-ports.service"
-if [[ -f $ports_unit ]]; then
-  systemctl --user disable --now nebius-ports.service
-  rm -f -- "$ports_unit"
-  systemctl --user daemon-reload
+stage="removing the Omarchy plugin"
+if [[ $from_omarchy != true ]]; then
+  remove_args=(plugin remove "$PLUGIN_ID" --yes)
+  # New Omarchy hosts run our cleanup entry point. The direct panel/agent path
+  # has already done that work, so use its explicit bypass to avoid recursion.
+  remove_help=$(omarchy plugin remove --help)
+  if grep -Fq -- '--skip-cleanup' <<<"$remove_help"; then
+    remove_args+=(--skip-cleanup)
+  fi
+  remove_output=$(omarchy "${remove_args[@]}")
+  printf '%s\n' "$remove_output"
+  [[ ! -e $PLUGIN_DIR && ! -L $PLUGIN_DIR ]] || fail "Omarchy left the plugin directory in place. Cleanup records were kept for retry."
+  plugin_absent=false
+  # rescanPlugins starts an asynchronous scan; allow its result to settle.
+  for attempt in {1..20}; do
+    shell_plugins=$(omarchy-shell shell listPlugins)
+    if jq -e --arg id "$PLUGIN_ID" 'type == "array" and all(.[]; .id != $id)' >/dev/null <<<"$shell_plugins"; then
+      plugin_absent=true
+      break
+    fi
+    sleep 0.1
+  done
+  [[ $plugin_absent == true ]] || fail "Omarchy still lists the plugin. Rescan plugins and check the outcome; cleanup records were kept."
+  plugin_backup=$(sed -n 's/^Removed nebius\. Backup at: //p' <<<"$remove_output")
+  if [[ $(dirname -- "$plugin_backup") == "$HOME/.config/omarchy/plugins" &&
+        $(basename -- "$plugin_backup") =~ ^\.nebius\.bak\.[0-9]+(-[0-9]+)?$ && ! -L $plugin_backup ]]; then
+    rm -rf -- "$plugin_backup"
+  fi
 fi
-rm -rf -- "$STATE_DIR"
+
+stage="removing local state and private MCP cache"
 rm -rf -- "$MCP_CACHE"
+rm -rf -- "$STATE_DIR"
+[[ ! -e $STATE_DIR && ! -e $MCP_CACHE && ! -e $ports_unit ]] || fail "Local files remain; inspect the reported paths before reinstalling."
 
-remove_output=$(omarchy plugin remove "$PLUGIN_ID" --yes)
-printf '%s\n' "$remove_output"
-plugin_backup=$(sed -n 's/^Removed nebius\. Backup at: //p' <<<"$remove_output")
-case "$plugin_backup" in
-  "$HOME/.config/omarchy/plugins/.nebius.bak."*) rm -rf -- "$plugin_backup" ;;
-esac
-for old_backup in "$HOME/.config/omarchy/plugins"/.nebius.bak.*; do
-  [[ -e $old_backup ]] && rm -rf -- "$old_backup"
-done
-
-printf '\n  Local Nebius plugin setup removed. Cloud resources were not changed.\n'
+if [[ $from_omarchy == true ]]; then
+  printf '\n  Local setup cleaned. Omarchy will now remove the plugin files.\n  Cloud resources were not changed.\n'
+else
+  printf '\n  Local Nebius plugin setup removed. Cloud resources were not changed.\n'
+fi
 [[ $cli_policy == "keep" && -x $CLI ]] && printf '  Kept the Nebius CLI for reuse.\n'
 [[ $ssh_key_policy == "keep" && ( -f $SSH_KEY || -f $SSH_KEY.pub ) ]] && printf '  Kept the dedicated SSH key and access it provides.\n'
+[[ $uv_policy == "keep" && $uv_owned == true ]] && printf '  Kept the shared uv package for other applications.\n'
 printf '  Reinstall the plugin to run the complete setup again.\n'

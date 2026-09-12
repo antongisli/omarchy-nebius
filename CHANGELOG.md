@@ -1,5 +1,13 @@
 # Release notes
 
+## Unreleased · Uninstall hardening
+
+- Panel and agent removal share one local-only uninstaller, with preflight, widget unload and post-removal checks.
+- Added typed agent uninstall planning and confirmation tools; removing only an MCP registration is no longer described as uninstalling the Omarchy plugin.
+- Non-interactive removal keeps the CLI, SSH key and shared uv package by default. Removing uv requires a visible terminal; unrelated installations are preserved.
+- Failed cleanup returns an error instead of success. Cleanup-only cancellation aborts the host's removal; active mutations block uninstall.
+- Added an optional `entryPoints.uninstall` adapter for the proposed Omarchy cleanup hook. Native-command cleanup requires that upstream support; existing Omarchy 4.0.2 does not invoke hooks. Marketplace publication remains blocked pending that support and a verified end-to-end removal/reinstall check.
+
 ## 0.7.6 · 2026-09-12 · Public beta
 
 Includes the previously unpublished 0.7.4 and 0.7.5 work.

@@ -7,10 +7,12 @@ import json
 import sys
 import nebius_jobs as jobs
 import nebius_ports as ports
+import nebius_uninstall as removal
 from typing import Any, Callable
 
 from nebius_core import (
     NebiusError,
+    installation_guard,
     connect_vm,
     create_nebius_project,
     create_gpu_vm,
@@ -51,6 +53,10 @@ INSTRUCTIONS = (
     "disks remain billable."
     " Creation and lifecycle tools return background job IDs; use list_operations to follow completion. "
     "New VMs have static public IPv4 with SSH-only ingress. Use forward_port for local application access; ask which ports."
+    " To uninstall this Omarchy plugin, call plan_plugin_uninstall, explain the cloud-resource warning and ask about "
+    "keeping the CLI, dedicated SSH key and shared uv runtime. After explicit approval, call uninstall_plugin. "
+    "Removing only an agent MCP registration or deleting the plugin folder is not a complete uninstall. "
+    "Never report removal as complete without the uninstaller's verified result."
 )
 
 
@@ -183,6 +189,12 @@ TOOLS.append(tool(
     {}, [], read_only=False,
 ))
 TOOLS.extend([
+    tool("plan_plugin_uninstall", "Check local uninstall prerequisites and explain removal scope, retained cloud resources and optional tools. No cloud access or deletion.",
+         {}, [], read_only=True),
+    tool("uninstall_plugin", "Uninstall the Nebius Omarchy plugin and its local setup using the panel's verified uninstaller. Confirm scope and retention choices first. Never deletes cloud resources.",
+         {"confirmed": {"type": "boolean"}, "keep_cli": {"type": "boolean"},
+          "keep_ssh_key": {"type": "boolean"}, "keep_uv": {"type": "boolean"}},
+         ["confirmed", "keep_cli", "keep_ssh_key", "keep_uv"], read_only=False, destructive=True),
     tool("delete_saved_disk", "Permanently delete a verified unused plugin boot disk after explicit confirmation. Refuses attached or protected disks.",
          {"disk_id": {"type": "string"}, "confirmed": {"type": "boolean"}}, ["disk_id", "confirmed"], read_only=False, destructive=True),
     tool("inspect_vm_storage", "List a VM's attached disk names, IDs, sizes and cleanup boundaries.",
@@ -192,6 +204,9 @@ TOOLS.extend([
 
 def _call(name: str, arguments: dict[str, Any]) -> Any:
     handlers: dict[str, Callable[[], Any]] = {
+        "plan_plugin_uninstall": removal.plan,
+        "uninstall_plugin": lambda: removal.uninstall(confirmed=arguments.get("confirmed"),
+            keep_cli=arguments.get("keep_cli"), keep_ssh_key=arguments.get("keep_ssh_key"), keep_uv=arguments.get("keep_uv")),
         "view_gpu_capacity": lambda: gpu_capacity(force_refresh=arguments.get("refresh") is True),
         "list_vms": lambda: list_vms(force_refresh=arguments.get("refresh") is True),
         "recover_launch": lambda: recover_launch(str(arguments.get("request_id", ""))),
@@ -219,7 +234,10 @@ def _call(name: str, arguments: dict[str, Any]) -> Any:
     }
     if name not in handlers:
         raise NebiusError(f"Unknown tool: {name}")
-    return handlers[name]()
+    if name in {"plan_plugin_uninstall", "uninstall_plugin"}:
+        return handlers[name]()
+    with installation_guard():
+        return handlers[name]()
 
 
 def submit_delete(command, flag, resource_id, confirmed):
@@ -285,7 +303,7 @@ def handle(message: dict[str, Any]) -> None:
             return
         try:
             _result(request_id, _call(str(params.get("name") or ""), arguments))
-        except NebiusError as error:
+        except (NebiusError, removal.UninstallError) as error:
             _write(
                 {
                     "jsonrpc": "2.0",
