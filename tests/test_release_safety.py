@@ -151,8 +151,11 @@ curl() {
         private.parent.mkdir(parents=True)
         private.write_text("#!/bin/sh\nprintf 'cli:%s\\n' \"$*\"\n")
         private.chmod(0o700)
+        command = self.root / ".local/bin/nebius"
+        command.parent.mkdir(parents=True)
+        command.symlink_to(ROOT / "bin/nebius-cli")
         result = subprocess.run(
-            [str(ROOT / "bin/nebius-cli"), "version"],
+            [str(command), "version"],
             env={**os.environ, "HOME": str(self.root), "XDG_DATA_HOME": str(data_home)},
             text=True, capture_output=True, timeout=10,
         )
