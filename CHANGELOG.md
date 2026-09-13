@@ -1,5 +1,11 @@
 # Release notes
 
+## 0.8.2 · 2026-09-13 · Terminal launcher fix
+
+- Fixed `nebius` resolving its runtime relative to the `~/.local/bin` symlink
+  instead of the installed plugin directory.
+- Added a regression that invokes the launcher through the real terminal link.
+
 ## 0.8.1 · 2026-09-13 · Nebius CLI in regular terminals
 
 - Setup now makes the verified CLI available as `nebius` through a managed
