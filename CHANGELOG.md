@@ -1,5 +1,13 @@
 # Release notes
 
+## 0.8.1 · 2026-09-13 · Nebius CLI in regular terminals
+
+- Setup now makes the verified CLI available as `nebius` through a managed
+  `~/.local/bin` link, without editing shell profiles.
+- Existing terminal commands and paths are preserved. Full uninstall removes
+  only the exact plugin-created link; keeping the underlying CLI still makes
+  reinstall faster.
+
 ## 0.8.0 · 2026-09-12 · Public beta · Images and VM lifecycle
 
 - Added a short account and billing signup guide; clarified image defaults,

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+readonly PLUGIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly RUNTIME="$PLUGIN_DIR/libexec/nebius_runtime.py"
+
+cli=$(python3 "$RUNTIME")
+if [[ ! -x $cli ]]; then
+  printf 'Nebius CLI is unavailable. Open the Nebius panel and choose Set up / reconnect.\n' >&2
+  exit 1
+fi
+
+exec "$cli" "$@"

@@ -27,6 +27,10 @@ class UninstallTests(unittest.TestCase):
         if path:
             environment["PATH"] = path
             fake_bin = Path(path.split(os.pathsep)[0])
+            if not (fake_bin / "python3").exists():
+                self.write_command(fake_bin / "python3", f'''#!/bin/sh
+exec "{sys.executable}" "$@"
+''')
             if not (fake_bin / "omarchy-shell").exists():
                 self.write_command(fake_bin / "omarchy-shell", '''#!/bin/sh
 if [ -d "$HOME/.config/omarchy/plugins/nebius" ]; then
@@ -58,9 +62,20 @@ fi
             plugin = home / ".config/omarchy/plugins/nebius"
             (plugin / "libexec").mkdir(parents=True)
             (plugin / "libexec/nebius_agent_mcp.py").write_text("# test")
+            launcher = plugin / "bin/nebius-cli"
+            launcher.parent.mkdir()
+            self.write_command(launcher, "#!/bin/sh\nexit 0\n")
             state_dir = home / ".state/nebius"
             state_dir.mkdir(parents=True)
             (state_dir / "setup.log").write_text("setup")
+            terminal_command = home / ".local/bin/nebius"
+            terminal_command.parent.mkdir(parents=True)
+            terminal_command.symlink_to(launcher)
+            (state_dir / "install-receipt.json").write_text(json.dumps({
+                "owned": {"cli_link": True},
+                "cli_link_path": str(terminal_command),
+                "cli_link_target": str(launcher),
+            }))
             private_cache = home / ".cache/nebius/uv"
             private_cache.mkdir(parents=True)
             (private_cache / "environment").write_text("plugin runtime")
@@ -138,6 +153,8 @@ printf '%s\\n' 'Removed nebius.'
             self.assertFalse(plugin.exists())
             self.assertFalse(state_dir.exists())
             self.assertFalse(private_cache.exists())
+            self.assertFalse(terminal_command.exists())
+            self.assertFalse(terminal_command.is_symlink())
             self.assertEqual(other_cache.read_text(), "keep")
             self.assertFalse(ssh_key.exists())
             self.assertFalse(ssh_key.with_suffix(".pub").exists())
@@ -152,6 +169,30 @@ printf '%s\\n' 'Removed nebius.'
             self.assertEqual(cloud_marker.read_text(), "must remain")
             self.assertIn("Nebius plugin setup removed", result.stdout)
             self.assertIn("Cloud resources were not changed", result.stdout)
+
+    def test_changed_terminal_command_is_preserved_on_uninstall(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            fake_bin, plugin, state, key = self.fixture(home)
+            launcher = plugin / "bin/nebius-cli"
+            launcher.parent.mkdir()
+            self.write_command(launcher, "#!/bin/sh\nexit 0\n")
+            replacement = home / "user-nebius"
+            self.write_command(replacement, "#!/bin/sh\nexit 0\n")
+            command = home / ".local/bin/nebius"
+            command.parent.mkdir(parents=True)
+            command.symlink_to(replacement)
+            (state / "install-receipt.json").write_text(json.dumps({
+                "owned": {"cli_link": True},
+                "cli_link_path": str(command),
+                "cli_link_target": str(launcher),
+            }))
+
+            result = self.run_uninstall(home, "--yes", path=str(fake_bin) + os.pathsep + os.environ["PATH"])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(command.is_symlink())
+            self.assertEqual(os.readlink(command), str(replacement))
+            self.assertIn("no longer matches the plugin-created link", result.stdout)
 
     def test_explicit_keep_preserves_cli_and_ssh_key(self):
         with tempfile.TemporaryDirectory() as directory:

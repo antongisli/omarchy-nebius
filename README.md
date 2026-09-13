@@ -65,7 +65,7 @@ omarchy plugin add https://github.com/antongisli/omarchy-nebius --enable
 2. Follow the terminal prompts and sign in through your browser.
 3. Press **G** to choose a GPU, review the estimate and launch.
 
-Setup installs **uv**, a checksum-verified **Nebius CLI**, pinned **official Nebius MCP**, and a dedicated SSH key. Package installation may ask for your password. [Setup details →](docs/reference.md#what-setup-does)
+Setup installs **uv**, a checksum-verified **Nebius CLI**, pinned **official Nebius MCP**, and a dedicated SSH key. The CLI is available as `nebius` in regular terminals by default—no shell config needed. Package installation may ask for your password. [Setup details →](docs/reference.md#what-setup-does)
 
 [GPU pricing →](https://nebius.com/prices)
 
