@@ -15,6 +15,8 @@ readonly CLEANUP_HELPER="$(dirname -- "$RUNTIME")/nebius_uninstall.py"
 readonly SHORTCUTS_HELPER="$(dirname -- "$RUNTIME")/nebius_shortcuts.py"
 readonly CLI="$(python3 "$RUNTIME")"
 readonly PRIVATE_CLI="$(python3 "$RUNTIME" private-cli)"
+readonly CLI_COMMAND="$HOME/.local/bin/nebius"
+readonly CLI_LAUNCHER="$PLUGIN_DIR/bin/nebius-cli"
 readonly CLI_CREDENTIALS="$HOME/.nebius/credentials.yaml"
 readonly CLI_SHA256="fd8c967cdfbd6c28f69979c87c1c8f9c52244219ed4981c48f9b40be314bed98"
 readonly CLI_SHA256_ARM64="91edf41c2ac03a551b84347c1fff739d55f32d968df184bc9b08e4780de71bb9"
@@ -78,8 +80,10 @@ legacy_installed() {
 
 uv_owned=false
 cli_owned=false
+cli_link_owned=false
 owned uv && uv_owned=true
 owned cli && cli_owned=true
+owned cli_link && cli_link_owned=true
 legacy_installed "✓ Installed MCP runtime (" && uv_owned=true
 legacy_installed "✓ Installed and verified Nebius CLI 0.12.269" && cli_owned=true
 owned_cli=$(jq -r '.cli_path // empty' "$RECEIPT" 2>/dev/null || true)
@@ -88,6 +92,11 @@ if [[ $owned_cli != "$PRIVATE_CLI" && $owned_cli != "$HOME/.nebius/bin/nebius" ]
   cli_owned=false  # A receipt must never authorize deletion at an arbitrary path.
 fi
 [[ ! -L $owned_cli ]] || cli_owned=false
+owned_cli_link=$(jq -r '.cli_link_path // empty' "$RECEIPT" 2>/dev/null || true)
+owned_cli_link_target=$(jq -r '.cli_link_target // empty' "$RECEIPT" 2>/dev/null || true)
+if [[ $owned_cli_link != "$CLI_COMMAND" || $owned_cli_link_target != "$CLI_LAUNCHER" ]]; then
+  cli_link_owned=false  # A receipt must never authorize deletion at an arbitrary path.
+fi
 
 printf '\n  Uninstall Nebius plugin\n\n'
 printf '  This removes local setup:\n'
@@ -96,6 +105,7 @@ printf '    • Local setup history and MCP cache\n'
 printf '    • Dedicated Nebius profile and browser token\n'
 printf '    • Codex and Claude Code MCP registrations\n'
 printf '    • Plugin shortcuts\n'
+if [[ $cli_link_owned == true ]]; then printf '    • Plugin-managed nebius command in ~/.local/bin\n'; fi
 if [[ $uv_owned == true ]]; then printf '    • Optional: uv installed by this plugin (other apps may now use it)\n'; fi
 if [[ $cli_owned == true && -x $owned_cli ]]; then
   printf '\n  You can keep or remove the Nebius CLI.\n'
@@ -329,6 +339,15 @@ fi
 
 stage="removing plugin shortcuts"
 python3 "$SHORTCUTS_HELPER" remove-for-uninstall
+
+stage="removing the terminal command"
+if [[ $cli_link_owned == true ]]; then
+  if [[ -L $CLI_COMMAND && $(readlink -- "$CLI_COMMAND") == "$CLI_LAUNCHER" ]]; then
+    rm -f -- "$CLI_COMMAND"
+  elif [[ -e $CLI_COMMAND || -L $CLI_COMMAND ]]; then
+    printf '  Kept terminal command because it no longer matches the plugin-created link.\n'
+  fi
+fi
 
 if [[ $cli_policy == "remove" && $cli_owned == true && -x $owned_cli ]]; then
   installed_sha=$(sha256sum "$owned_cli" | cut -d' ' -f1)

@@ -5,7 +5,7 @@ This is the independent Nebius GPU plugin for Omarchy. It does not depend on or 
 ## Removing the installed plugin
 
 - Use the Nebius MCP tools `plan_plugin_uninstall` and `uninstall_plugin` when available. They share the panel's uninstaller and work without an Omarchy cleanup hook.
-- Otherwise run `~/.config/omarchy/plugins/nebius/bin/nebius-uninstall --check` first. Explain that cloud resources remain unchanged and may keep costing money. Ask whether to keep the CLI, dedicated SSH key and shared uv package; keeping them is the default. Removing the key can prevent access to existing VMs.
+- Otherwise run `~/.config/omarchy/plugins/nebius/bin/nebius-uninstall --check` first. Explain that cloud resources remain unchanged and may keep costing money. Ask whether to keep the underlying CLI, dedicated SSH key and shared uv package; keeping them is the default. The plugin-managed `~/.local/bin/nebius` link is removed either way and restored by setup on reinstall. Removing the key can prevent access to existing VMs.
 - After explicit approval, run that script with `--yes` and the agreed `--keep-cli`/`--remove-cli` and `--keep-ssh-key`/`--remove-ssh-key` flags. Use `--keep-uv` for unattended runs; package removal needs the user's visible terminal. Never run silent privilege escalation.
 - Do not substitute bare `omarchy plugin remove nebius`, deleting the directory or removing only its MCP registration. Current Omarchy does not invoke cleanup hooks, so these leave external setup behind.
 - If the installed bundle is already gone, run `bin/nebius-uninstall` from a checkout of this repository to finish cleanup. Do not run setup or create cloud resources first.

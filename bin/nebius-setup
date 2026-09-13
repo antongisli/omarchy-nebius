@@ -15,9 +15,12 @@ readonly CAPACITY_CACHE="$STATE_DIR/capacity.json"
 readonly MCP_MARKER="$STATE_DIR/mcp-$MCP_COMMIT-ok"
 readonly LOG_FILE="$STATE_DIR/setup.log"
 readonly INSTALL_RECEIPT="$STATE_DIR/install-receipt.json"
+readonly PLUGIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly RUNTIME="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../libexec" && pwd)/nebius_runtime.py"
 CLI=$(python3 "$RUNTIME")
 readonly PRIVATE_CLI="$(python3 "$RUNTIME" private-cli)"
+readonly CLI_COMMAND="$HOME/.local/bin/nebius"
+readonly CLI_LAUNCHER="$PLUGIN_DIR/bin/nebius-cli"
 readonly BRIDGE="$HOME/.config/omarchy/plugins/nebius/libexec/nebius_mcp_bridge.py"
 readonly CORE="$HOME/.config/omarchy/plugins/nebius/libexec/nebius_core.py"
 readonly CODEX_MCP="$HOME/.config/omarchy/plugins/nebius/libexec/nebius_codex_mcp.py"
@@ -30,7 +33,7 @@ mkdir -p "$STATE_DIR"
 touch "$LOG_FILE"
 
 if [[ ! -f $INSTALL_RECEIPT ]]; then
-  jq -n '{schema: "nebius.omarchy-install-receipt/v1", owned: {uv: false, cli: false, profile: false, ssh_key: false, codex_mcp: false, claude_mcp: false}}' >"$INSTALL_RECEIPT"
+  jq -n '{schema: "nebius.omarchy-install-receipt/v1", owned: {uv: false, cli: false, cli_link: false, profile: false, ssh_key: false, codex_mcp: false, claude_mcp: false}}' >"$INSTALL_RECEIPT"
 fi
 
 mark_owned() {
@@ -239,6 +242,33 @@ else
   say "✓ Installed and verified Nebius CLI $CLI_VERSION"
 fi
 
+stage="cli-command"
+write_state "running" "$stage" "Making the Nebius CLI available in regular terminals"
+say "● Adding the Nebius CLI to regular terminals"
+terminal_cli=$(command -v nebius 2>/dev/null || true)
+if [[ -L $CLI_COMMAND && $(readlink -- "$CLI_COMMAND") == "$CLI_LAUNCHER" ]]; then
+  say "✓ Nebius CLI already available as: nebius"
+elif [[ -n $terminal_cli ]]; then
+  say "○ Existing terminal command preserved: $terminal_cli"
+  say "  The plugin will continue using its verified CLI: $CLI"
+elif [[ -e $CLI_COMMAND || -L $CLI_COMMAND ]]; then
+  say "○ Existing path preserved: $CLI_COMMAND"
+  say "  Move it and run setup again if you want the plugin-managed command."
+else
+  mkdir -p "$(dirname -- "$CLI_COMMAND")"
+  ln -s -- "$CLI_LAUNCHER" "$CLI_COMMAND"
+  temp_receipt=$(mktemp "$STATE_DIR/.receipt.XXXXXX")
+  jq --arg path "$CLI_COMMAND" --arg target "$CLI_LAUNCHER" \
+    '.cli_link_path = $path | .cli_link_target = $target | .owned.cli_link = true' \
+    "$INSTALL_RECEIPT" >"$temp_receipt"
+  mv "$temp_receipt" "$INSTALL_RECEIPT"
+  say "✓ Nebius CLI available as: nebius"
+  case ":$PATH:" in
+    *":$(dirname -- "$CLI_COMMAND"):"*) ;;
+    *) say "  Open a new Omarchy terminal if this terminal has not loaded ~/.local/bin yet." ;;
+  esac
+fi
+
 stage="account"
 write_state "running" "$stage" "Connecting your Nebius account"
 if profile_is_browser_auth; then
@@ -364,4 +394,5 @@ say "✓ Nebius is ready"
 if (( agent_count > 0 )); then
   say "  Open a new $(agent_list) session to load the constrained Nebius tools."
 fi
-say "  The plugin uses $CLI directly and does not edit your shell profile."
+say "  Run 'nebius version' in a regular terminal to use the CLI."
+say "  No shell profile was edited."
