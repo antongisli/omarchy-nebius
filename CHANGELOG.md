@@ -5,6 +5,9 @@
 - SSH sessions now open with the configured terminal's native application
   identity, so Omarchy's universal Super+C and Super+V shortcuts keep working
   after connecting to a VM.
+- Deleting a VM now forgets all of its saved port forwards, clears their local
+  status and logs, and closes their supervised SSH tunnels without affecting
+  mappings for other VMs.
 
 ## 0.8.2 · 2026-09-13 · Terminal launcher fix
 

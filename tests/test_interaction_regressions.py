@@ -126,6 +126,7 @@ class InteractionTests(unittest.TestCase):
         self.assertEqual(len(screen.frames), 2)
         self.assertIn("Cannot be undone", screen.frames[-1])
         self.assertIn("Secondary disks", screen.frames[-1])
+        self.assertIn("port forwards", screen.frames[-1])
 
     def test_d_cannot_skip_unread_delete_terms(self):
         application, screen = app(["d", "\x1b"], 48, 20)

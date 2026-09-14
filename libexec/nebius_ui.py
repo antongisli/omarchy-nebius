@@ -1224,7 +1224,8 @@ class App:
             notes = [vm["name"] + "\nProject: " + vm["project_name"] + " · " + vm["region"]]
             if action == "delete":
                 notes += ["VM: " + vm["id"] + "\nBoot disk: " + str(vm.get("disk_id") or "not recorded"),
-                          "Permanently deletes the VM and boot disk, including all boot-disk data. Cannot be undone. Secondary disks are kept and remain billable."]
+                          "Permanently deletes the VM and boot disk, including all boot-disk data. Cannot be undone. Secondary disks are kept and remain billable.",
+                          "Saved port forwards for this VM are removed; other VMs' forwards are unchanged."]
             else:
                 notes += ["Starting resumes compute charges." if action == "start" else "Stops compute charges. Disks remain saved and billable."]
             if self.confirm_launch(notes, json.dumps(vm, indent=2), title=label,
