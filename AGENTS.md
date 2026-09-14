@@ -2,6 +2,8 @@
 
 This is the independent Nebius GPU plugin for Omarchy. It does not depend on or modify `other-tool`. Preserve unrelated user changes and cloud resources.
 
+Treat every tracked file and commit message as public. Product-status claims must be supported by public documentation or reproducible behavior from released public tools. Omit uncertain roadmap claims.
+
 ## Removing the installed plugin
 
 - Use the Nebius MCP tools `plan_plugin_uninstall` and `uninstall_plugin` when available. They share the panel's uninstaller and work without an Omarchy cleanup hook.
