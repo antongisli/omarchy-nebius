@@ -17,7 +17,7 @@ class ShortcutTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.file = Path(self.temp.name) / "bindings.lua"
-        self.original = '-- Other app\no.bind("SUPER + SHIFT + G", "GPU Workspace", "keep-nebi")\n'
+        self.original = '-- Other app\no.bind("SUPER + SHIFT + G", "GPU Workspace", "keep-other")\n'
         self.file.write_text(self.original)
         self.path_patch = patch.object(keys, "path", return_value=self.file)
         self.path_patch.start()

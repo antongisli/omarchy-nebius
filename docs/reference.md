@@ -2,14 +2,14 @@
 
 Implementation details for [Nebius GPU for Omarchy](../README.md).
 
-This repository does not depend on `other-tool` or modify its configuration.
+The plugin uses a dedicated profile and does not modify unrelated integrations.
 
 ## What setup does
 
 - Installs Arch's official `uv` package through `omarchy-pkg-add uv` in a visible terminal.
 - Reuses an existing matching Nebius CLI without taking ownership. Otherwise installs the checksum-verified `0.12.269` binary privately at `${XDG_DATA_HOME:-~/.local/share}/nebius/cli/0.12.269/nebius`. Existing `~/.nebius/bin/nebius` binaries are never overwritten, including newer or older versions. Unexpected files at the private destination stop setup with a repair message. An exact-path installation receipt distinguishes owned and borrowed CLIs. When the terminal command is free, setup adds a plugin-owned `~/.local/bin/nebius` link so `nebius` works in regular Omarchy terminals. Existing commands and paths are preserved.
 - Creates the dedicated `omarchy-nebius-mcp` profile through the official `nebius profile create` browser flow.
-- Rejects service-account profiles and paths under `~/.other-tool`; it never reuses the active `other-tool` profile.
+- Rejects service-account profiles and uses only its dedicated browser-auth profile.
 - Uses the selected tenant without locking the plugin to one project. Projects created by the signed-in user are preferred; shared tenant projects are hidden from normal placement.
 - Downloads and tests Nebius MCP commit `6388bf779acdd331d9b2016230b37f8bf7177e12` in a plugin-private uv cache. It requires Python 3.13+; uv provisions the runtime environment.
 - Creates a dedicated Ed25519 key at `~/.ssh/nebius-ed25519` for plugin-created VMs.
@@ -91,7 +91,7 @@ respected. A failure after submission never triggers a second automatic launch.
 
 Stopped VMs stop incurring compute charges, but their disks remain billable until deleted.
 
-Estimates use [official Nebius pricing](https://docs.nebius.com/compute/resources/pricing), checked September 9, 2026; they exclude traffic and taxes and are not quotes. Quotas and eligibility can change; preflight reads them again for each confirmed launch. Nebius identifies supported preemptible platforms through [`allowed_for_preemptibles`](https://docs.nebius.com/compute/virtual-machines/preemptible), not through regional capacity counts.
+Estimates use [official Nebius pricing](https://docs.nebius.com/compute/resources/pricing); they exclude traffic and taxes and are not quotes. Quotas and eligibility can change; preflight reads them again for each confirmed launch. Nebius identifies supported preemptible platforms through [`allowed_for_preemptibles`](https://docs.nebius.com/compute/virtual-machines/preemptible), not through regional capacity counts.
 
 ## Install
 
@@ -105,7 +105,7 @@ Setup installs **Super+Ctrl+M → Open Nebius** if the key is free and no openin
 
 **D · Disable opening shortcut** keeps the bar icon and is remembered through setup/repair. When no shortcut is set, the same action reads **Keep shortcut disabled** and saves that opt-out after confirmation, so later setup does not add the default.
 
-Only the marked Nebius block in `~/.config/hypr/bindings.lua` is managed. Other applications, including `other-tool`, keep their bindings. Uninstall removes the marked block, reloads Hyprland and checks the result. Manually edited or symlinked binding files may require manual repair rather than automatic replacement.
+Only the marked Nebius block in `~/.config/hypr/bindings.lua` is managed. Other applications keep their bindings. Uninstall removes the marked block, reloads Hyprland and checks the result. Manually edited or symlinked binding files may require manual repair rather than automatic replacement.
 
 Optional direct-action shortcuts are provided in [config/keybindings.lua](../config/keybindings.lua):
 
@@ -179,13 +179,13 @@ bin/nebius-status --probe --json | jq
 
 The repository layout is compatible with Omarchy Quattro and the official marketplace: one root `manifest.json`, README, MIT license, and `preview.png`. The intended listing metadata is **Developer Tools** with the `ai`, `bar`, and `launcher` tags.
 
-Every submitted snapshot needs a fresh exact-commit scan with the marketplace's scanner and explicit maintainer approval. Installer, privilege and service-management capabilities require review; a clean static scan is not a security certification or marketplace approval. See the [0.8.0 release checks](releases/0.8.0.md) for release-specific evidence and remaining checks. The submission owner must confirm rights to the code and preview assets; attribution alone does not establish permission.
+Every submitted snapshot needs a fresh exact-commit scan with the marketplace's scanner and explicit maintainer approval. Installer, privilege and service-management capabilities require review; a clean static scan is not a security certification or marketplace approval.
 
 ## Security boundary
 
 The upstream beta MCP has a general command executor. This plugin pins every upstream MCP subprocess to the dedicated `omarchy-nebius-mcp` browser-auth profile and never forwards user-authored command strings to it. The agent-facing bridge accepts only typed arguments and calls predefined operations. Creation requires a fresh ten-minute plan plus write-tool approval. Start/stop/connect validate personal-project access; deletion additionally requires successful cloud creation audit evidence identifying the current tenant user as the VM creator, a review of the exact boot disk, and explicit destructive confirmation. Plugin registration and labels are not required. If creation audit history is missing or inaccessible, use the Nebius console to resolve ownership. Secondary disks are retained; protected or attached boot disks are never blindly removed. Interrupted cleanup is bound to the confirming account and tenant.
 
-Tests use temporary state, synthetic CLI responses and isolated installer stages, with no cloud mutations. Validation on Omarchy includes the full regression suite, the real CLI parser inside a disabled network namespace, manifest validation and offscreen widget rendering. Development testing has exercised VM lifecycle operations and SSH on the owner's account; it is not a fresh end-to-end provisioning test of every release. A clean install, browser sign-in and a newly created VM's first SSH/forward/delete flow remain a user-confirmed release smoke test; do not infer that coverage from unit tests or example screenshots.
+Tests use temporary state, synthetic CLI responses and isolated installer stages, with no cloud mutations. Validation on Omarchy includes the full regression suite, the real CLI parser inside a disabled network namespace, manifest validation and offscreen widget rendering. Live cloud operations require explicit user confirmation and are not inferred from unit tests or example screenshots.
 
 Since v0.5.1, confirmed creation validates the complete instance JSON with the real pinned CLI **before allocating a disk**. Validation runs in an unprivileged user/network namespace using Arch's `/usr/bin/unshare`; networking is disabled, and there is no unsandboxed fallback. If user namespaces are unavailable or validation cannot be established, creation stops before allocation. JSON enum names use the protobuf spelling (`READ_WRITE`, `STOP`, `FAIL`, `FORBID`), not the lowercase spellings used by CLI flags.
 
@@ -215,7 +215,7 @@ Use `U  Uninstall Nebius plugin` in the N panel, or ask a supported agent to uni
 
 An agent without the Nebius MCP connection should run this script's `--check` first, explain the scope and ask for approval and retention choices. After approval, `--yes --keep-cli --keep-ssh-key --keep-uv` removes the plugin while keeping those three dependencies. Use the corresponding `--remove-cli` or `--remove-ssh-key` only when requested. The repository's [agent instructions](../AGENTS.md) describe this fallback; no agent integration is required to run it.
 
-Confirmed uninstall removes the Omarchy widget/plugin, local state and private MCP cache, the dedicated `omarchy-nebius-mcp` profile and browser token, exact plugin-owned Codex and Claude Code MCP registrations, the plugin-managed `~/.local/bin/nebius` link, and the marked shortcut block. Separate choices ask whether to keep the underlying Nebius CLI, dedicated SSH key and shared uv package; all default to **Keep**, including non-interactive `--yes`. Explicit `--remove-cli`, `--remove-ssh-key` and `--remove-uv` opt into those removals. Keeping the CLI makes reinstall faster; setup restores the terminal command on reinstall. Keeping the key preserves access to existing VMs that trust it—a replacement key will not unlock those machines. uv may now be used by other applications; removing it requires a visible terminal and proof that setup installed it. A CLI is removable only when setup proves ownership and its checksum still matches; a changed binary is preserved. Pre-existing commands, profiles, unrelated MCP servers, keys, shortcuts, packages, and the separate `other-tool` integration are untouched.
+Confirmed uninstall removes the Omarchy widget/plugin, local state and private MCP cache, the dedicated `omarchy-nebius-mcp` profile and browser token, exact plugin-owned Codex and Claude Code MCP registrations, the plugin-managed `~/.local/bin/nebius` link, and the marked shortcut block. Separate choices ask whether to keep the underlying Nebius CLI, dedicated SSH key and shared uv package; all default to **Keep**, including non-interactive `--yes`. Explicit `--remove-cli`, `--remove-ssh-key` and `--remove-uv` opt into those removals. Keeping the CLI makes reinstall faster; setup restores the terminal command on reinstall. Keeping the key preserves access to existing VMs that trust it—a replacement key will not unlock those machines. uv may now be used by other applications; removing it requires a visible terminal and proof that setup installed it. A CLI is removable only when setup proves ownership and its checksum still matches; a changed binary is preserved. Pre-existing commands, profiles, unrelated MCP servers, keys, shortcuts and packages are untouched.
 
 Uninstall also stops and disables `nebius-ports.service`, removes its unit and saved forwards, and closes its SSH children.
 
