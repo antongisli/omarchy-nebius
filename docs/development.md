@@ -87,4 +87,4 @@ When releasing a widget change, move its QML entry point to a new versioned dire
 
 Open an issue or pull request with the behavior you want to change and its user-facing reason. Include reproduction steps for bugs. Keep credentials, account identifiers and private resource data out of issues and captures. Test consequential changes with synthetic responses before a live cloud trial.
 
-Use the system and terminal fonts, and retain arrows, j/k, Enter and Escape throughout. Brand accents must remain readable without changing the user's terminal palette. See [DESIGN.md](../DESIGN.md).
+Use the system and terminal fonts, and retain arrows, j/k, Enter and Escape throughout. Brand accents must remain readable without changing the user's terminal palette.

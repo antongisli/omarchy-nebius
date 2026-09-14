@@ -97,7 +97,7 @@ profile_is_browser_auth() {
   local block
   block=$(profile_block)
   grep -Eq '^[[:space:]]+auth-type:[[:space:]]+federation[[:space:]]*$' <<<"$block" &&
-    ! grep -Eqi 'service-account|(^|/)\.other-tool(/|$)' <<<"$block"
+    ! grep -Eqi 'service-account' <<<"$block"
 }
 
 credentials_are_current() {

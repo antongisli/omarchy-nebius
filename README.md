@@ -139,6 +139,6 @@ Same cleanup, no Omarchy hook required. Choose whether to keep the CLI, SSH key 
 
 Found a rough edge? [Open an issue](https://github.com/antongisli/omarchy-nebius/issues). Contributions welcome.
 
-[Release notes](CHANGELOG.md) · [Full reference](docs/reference.md) · [Contributing](docs/development.md) · [Roadmap](docs/roadmap.md)
+[Release notes](CHANGELOG.md) · [Full reference](docs/reference.md) · [Contributing](docs/development.md)
 
 Maintained by [Anton Smith](https://github.com/antongisli). Official Nebius CLI + MCP. [MIT code](LICENSE) · [Brand credits](assets/NOTICE.md)

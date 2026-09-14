@@ -78,7 +78,7 @@
 
 ## 0.7.6 · 2026-09-12 · Public beta
 
-Includes the previously unpublished 0.7.4 and 0.7.5 work.
+Includes the 0.7.4 and 0.7.5 work.
 
 ### GPU workflow and SSH
 
