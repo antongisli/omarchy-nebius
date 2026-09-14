@@ -127,7 +127,7 @@ class LaunchReadinessTests(unittest.TestCase):
     def test_completed_report_remains_after_an_ssh_attempt_at_each_terminal_size(self):
         for width, height in [(48, 20), (80, 24), (120, 44)]:
             application, screen = app(['c', '\x1b'], width, height)
-            with patch.object(application, 'ssh', side_effect=ui.Back) as session:
+            with patch.object(application, 'open_ssh', side_effect=ui.Back) as session:
                 application.operation_result({'operation': report(), 'result': VM})
             session.assert_called_once()
             self.assertEqual(len(screen.frames), 2)

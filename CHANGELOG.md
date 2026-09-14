@@ -1,5 +1,11 @@
 # Release notes
 
+## Unreleased
+
+- SSH sessions now open with the configured terminal's native application
+  identity, so Omarchy's universal Super+C and Super+V shortcuts keep working
+  after connecting to a VM.
+
 ## 0.8.2 · 2026-09-13 · Terminal launcher fix
 
 - Fixed `nebius` resolving its runtime relative to the `~/.local/bin` symlink

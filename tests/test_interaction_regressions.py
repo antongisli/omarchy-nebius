@@ -167,9 +167,17 @@ class InteractionTests(unittest.TestCase):
              patch.object(ui.core.subprocess, "Popen") as launch:
             ui.core.connect_vm(VM["id"])
         command = launch.call_args.args[0]
+        self.assertEqual(command[:2], ["xdg-terminal-exec", "-e"])
+        self.assertNotIn("--app-id", command)
         self.assertIn("connect", command)
         self.assertIn("--vm-id", command)
         self.assertTrue(any(part.endswith("/bin/nebius-ui") for part in command))
+
+    def test_panel_ssh_opens_a_normal_terminal_identity(self):
+        application, _ = app([])
+        with patch.object(ui.core, "launch_ssh_terminal") as launch:
+            application.open_ssh(dict(VM))
+        launch.assert_called_once_with(VM["id"], VM["ssh_user"])
 
 
 if __name__ == "__main__":
