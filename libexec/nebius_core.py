@@ -2199,18 +2199,32 @@ def connect_vm(vm_id: str, *, launch: bool = True, username: str | None = None) 
     command += ssh_identity_options(vm)
     command += [f"{username}@{address}"]
     if launch:
-        try:
-            subprocess.Popen(
-                ["omarchy-launch-tui", "--app-id=org.nebius.ssh",
-                 str(Path(__file__).resolve().parent.parent / "bin/nebius-ui"), "connect", "--vm-id", vm_id, "--username", username],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        except OSError as error:
-            raise NebiusError(f"Could not open the SSH terminal: {error}") from error
+        launch_ssh_terminal(vm_id, username)
     return {"id": vm_id, "name": vm.get("name"), "public_ip": address, "managed": bool(vm.get("managed")),
             "launched": launch, "command": command}
+
+
+def ssh_terminal_command(vm_id: str, username: str) -> list[str]:
+    """Use the configured terminal's native identity so Omarchy clipboard keys work."""
+    if not vm_id or not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", username):
+        raise NebiusError("Invalid SSH connection settings")
+    return [
+        "xdg-terminal-exec", "-e",
+        str(Path(__file__).resolve().parent.parent / "bin/nebius-ui"),
+        "connect", "--vm-id", vm_id, "--username", username,
+    ]
+
+
+def launch_ssh_terminal(vm_id: str, username: str) -> None:
+    try:
+        subprocess.Popen(
+            ssh_terminal_command(vm_id, username),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as error:
+        raise NebiusError(f"Could not open the SSH terminal: {error}") from error
 
 
 def _print(value: Any) -> None:

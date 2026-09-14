@@ -890,7 +890,7 @@ class App:
                 return
             if key in ("c", "C") and vm.get("id"):
                 try:
-                    self.ssh(vm)
+                    self.open_ssh(vm)
                 except Back:
                     pass
             elif key in ("d", "D"):
@@ -903,6 +903,13 @@ class App:
                 offset += slots
             elif key == curses.KEY_PPAGE:
                 offset = max(0, offset - slots)
+
+    def open_ssh(self, vm):
+        username = vm.get("ssh_user") or "ubuntu"
+        if not vm.get("ssh_user"):
+            username = self.edit("SSH username", username,
+                                 notes=["This VM already exists. Use its login user; SSH will use your configured keys or agent."])
+        core.launch_ssh_terminal(vm["id"], username)
 
     def ssh(self, vm):
         launch = jobs.latest_vm_job(vm["id"])
@@ -1188,7 +1195,7 @@ class App:
         if action == "operation":
             self.watch(vm["operation_job_id"], "Operation progress · " + vm["name"])
         elif action == "connect":
-            self.ssh(vm)
+            self.open_ssh(vm)
         elif action == "ports":
             self.ports(vm)
         elif action == "timings":
@@ -1387,7 +1394,7 @@ class App:
                             self.vm_actions(choice)
                             refresh = True
                         else:
-                            self.ssh(choice)
+                            self.open_ssh(choice)
                     except Back:
                         pass
                 else:
