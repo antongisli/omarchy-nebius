@@ -2138,7 +2138,7 @@ def delete_vm(vm_id: str, confirmed: bool, expected_disk_id: str | None = None) 
         _compute_mutation("instance", "delete", vm_id)
         _update_vm_record(vm_id, {"instance_deleted": True})
     import nebius_ports
-    nebius_ports.disable_vm(vm_id)
+    removed_ports = nebius_ports.remove_vm(vm_id)
     disk_id = str(vm.get("disk_id") or "")
     if disk_id.startswith("computedisk-") and _cloud_operation_path(disk_id).exists():
         _compute_mutation("disk", "delete", disk_id)
@@ -2161,7 +2161,8 @@ def delete_vm(vm_id: str, confirmed: bool, expected_disk_id: str | None = None) 
     _cloud_operation_path(vm_id).unlink(missing_ok=True)
     if disk_id:
         _cloud_operation_path(disk_id).unlink(missing_ok=True)
-    return {"id": vm_id, "name": vm.get("name"), "deleted": True, "disk_deleted": bool(disk_id)}
+    return {"id": vm_id, "name": vm.get("name"), "deleted": True, "disk_deleted": bool(disk_id),
+            "ports_removed": removed_ports}
 
 
 def connect_vm(vm_id: str, *, launch: bool = True, username: str | None = None) -> dict[str, Any]:

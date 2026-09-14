@@ -107,14 +107,22 @@ def change(mapping_id, action):
     return {"id": mapping_id, "action": action}
 
 
-def disable_vm(vm_id):
+def remove_vm(vm_id):
     with core.mutation_guard(wait=True, resource="ports"):
         saved = mappings()
-        for item in saved:
-            if item["vm_id"] == vm_id:
-                item.update(enabled=False, deleted=True)
-        if saved:
-            core._atomic_json(core.STATE_DIR / "ports.json", saved)
+        removed = {item["id"] for item in saved if item.get("vm_id") == vm_id}
+        if not removed:
+            return 0
+        core._atomic_json(core.STATE_DIR / "ports.json", [item for item in saved if item["id"] not in removed])
+        status_path = core.STATE_DIR / "ports-status.json"
+        status = core._read_json(status_path, {})
+        if isinstance(status, dict) and isinstance(status.get("ports"), dict):
+            status["ports"] = {key: value for key, value in status["ports"].items() if key not in removed}
+            core._atomic_json(status_path, status)
+        runtime = core.STATE_DIR / "ports-runtime"
+        for mapping_id in removed:
+            (runtime / (mapping_id + ".log")).unlink(missing_ok=True)
+        return len(removed)
 
 
 def listing():
@@ -166,13 +174,18 @@ def serve():
                 child[0].kill()
                 child[0].wait()
             child[1].close()
+        (sockets / (key + ".sock")).unlink(missing_ok=True)
     try:
         while not stopping:
             saved = mappings()
+            saved_ids = {m["id"] for m in saved}
             enabled = {m["id"]: m for m in saved if m["enabled"] and not m.get("deleted")}
             for key in list(children):
                 if key not in enabled:
                     terminate(key)
+            for key in list(statuses):
+                if key not in saved_ids:
+                    statuses.pop(key, None)
             for vm_id, future in list(futures.items()):
                 if future.done():
                     try:
@@ -186,7 +199,12 @@ def serve():
                         cache[vm_id] = {**cache.get(vm_id, {}), "checked": time.monotonic(), "error": str(error)}
                         if "notfound" in str(error).lower() or "not found" in str(error).lower():
                             cache[vm_id]["state"] = "deleted"
-                            disable_vm(vm_id)
+                            remove_vm(vm_id)
+                            for key, item in list(enabled.items()):
+                                if item.get("vm_id") == vm_id:
+                                    enabled.pop(key, None)
+                                    terminate(key)
+                                    statuses.pop(key, None)
                     del futures[vm_id]
             for key, item in enabled.items():
                 vm_id = item["vm_id"]

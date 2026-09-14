@@ -95,7 +95,7 @@ class PortsAndJobsTests(unittest.TestCase):
                 core._write_operation("running", "delete", index)
         self.assertEqual(core._read_json(self.root / "jobs" / ("a" * 24 + ".operation.json"), {})["message"], "a")
 
-    def test_add_pause_resume_remove_and_deleted_vm(self):
+    def test_add_pause_resume_and_remove(self):
         with patch.object(core, "_accessible_vm", return_value=({}, self.vm)), patch.object(ports, "install"), \
              patch.object(ports, "available", return_value=True):
             item = ports.add(self.vm["id"], 8188)
@@ -106,12 +106,32 @@ class PortsAndJobsTests(unittest.TestCase):
             ports.change(item["id"], "pause")
             self.assertEqual(ports.listing()[0]["state"], "Paused")
             ports.change(item["id"], "resume")
-            ports.disable_vm(self.vm["id"])
-            self.assertEqual(ports.listing()[0]["state"], "VM deleted")
-            with self.assertRaises(core.NebiusError):
-                ports.change(item["id"], "resume")
             ports.change(item["id"], "remove")
             self.assertEqual(ports.mappings(), [])
+
+    def test_remove_vm_forgets_only_its_mappings_status_and_logs(self):
+        mappings = [
+            {"id": "target-a", "vm_id": self.vm["id"], "enabled": True, "local_port": 8188},
+            {"id": "other", "vm_id": "computeinstance-other", "enabled": True, "local_port": 8000},
+            {"id": "target-b", "vm_id": self.vm["id"], "enabled": False, "local_port": 7860},
+        ]
+        core._atomic_json(self.root / "ports.json", mappings)
+        core._atomic_json(self.root / "ports-status.json", {
+            "updated_at": time.time(),
+            "ports": {item["id"]: {"state": "Connected"} for item in mappings},
+        })
+        runtime = self.root / "ports-runtime"
+        runtime.mkdir()
+        for item in mappings:
+            (runtime / (item["id"] + ".log")).write_text(item["id"])
+
+        self.assertEqual(ports.remove_vm(self.vm["id"]), 2)
+        self.assertEqual([item["id"] for item in ports.mappings()], ["other"])
+        self.assertEqual(list(core._read_json(self.root / "ports-status.json", {})["ports"]), ["other"])
+        self.assertFalse((runtime / "target-a.log").exists())
+        self.assertFalse((runtime / "target-b.log").exists())
+        self.assertTrue((runtime / "other.log").exists())
+        self.assertEqual(ports.remove_vm(self.vm["id"]), 0)
 
     def test_occupied_local_port_is_rejected_before_service_install(self):
         with socket.socket() as listener:
@@ -188,7 +208,7 @@ class PortsAndJobsTests(unittest.TestCase):
         self.assertIn("nebius_ports.py", content)
         self.assertIn(["systemctl", "--user", "enable", "--now", "nebius-ports.service"], [c.args[0] for c in run.call_args_list])
 
-    def test_forward_service_stops_child_when_mapping_paused(self):
+    def test_forward_service_stops_child_when_mapping_removed(self):
         item = {"id": "abcdef", "vm_id": self.vm["id"], "vm_name": "test", "username": "dev",
                 "address": "192.0.2.1", "enabled": True, "local_port": 18000, "remote_port": 8000}
         child = Mock()
@@ -203,7 +223,7 @@ class PortsAndJobsTests(unittest.TestCase):
         future.done.return_value = False
         pool = Mock()
         pool.submit.return_value = future
-        with patch.object(ports, "mappings", side_effect=[[item], [{**item, "enabled": False}]]), \
+        with patch.object(ports, "mappings", side_effect=[[item], []]), \
              patch.object(ports.signal, "signal", side_effect=lambda sig, handler: handlers.update({sig: handler})), \
              patch.object(ports.time, "sleep", side_effect=sleep), patch.object(ports, "available", return_value=True), \
              patch("concurrent.futures.ThreadPoolExecutor", return_value=pool), \

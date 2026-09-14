@@ -34,7 +34,7 @@ class DeletionOwnerTests(unittest.TestCase):
         self.projects = self.mock(core, 'sync_personal_projects', return_value={'projects': [self.project]})
         self.cli = self.mock(core, 'run_cli', side_effect=self.read)
         self.mutate = self.mock(core, '_compute_mutation')
-        self.mock(ports, 'disable_vm')
+        self.remove_ports = self.mock(ports, 'remove_vm', return_value=2)
 
     def mock(self, obj, key, *args, **kwargs):
         context = patch.object(obj, key, *args, **kwargs)
@@ -61,9 +61,12 @@ class DeletionOwnerTests(unittest.TestCase):
         self.assertTrue(summary['can_delete'])
         self.assertFalse(summary['managed'])
         self.assertEqual(summary['disk_id'], 'computedisk-boot')
-        self.assertTrue(self.delete()['disk_deleted'])
+        result = self.delete()
+        self.assertTrue(result['disk_deleted'])
+        self.assertEqual(result['ports_removed'], 2)
         self.assertEqual([call.args for call in self.mutate.call_args_list],
                          [('instance', 'delete', 'computeinstance-mine'), ('disk', 'delete', 'computedisk-boot')])
+        self.remove_ports.assert_called_once_with('computeinstance-mine')
         self.assertFalse(core._registry()['vms'])
 
     def test_other_users_vm_is_rejected_even_with_plugin_labels(self):
