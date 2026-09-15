@@ -40,6 +40,7 @@ PROJECTS_FILE = STATE_DIR / "projects.json"
 INVENTORY_FILE = STATE_DIR / "inventory.json"
 CONNECTIONS_FILE = STATE_DIR / "connections.json"
 PREFERENCES_FILE = STATE_DIR / "preferences.json"
+INVENTORY_SCHEMA = "nebius.inventory/v2"
 CREDENTIALS_FILE = HOME / ".nebius/credentials.yaml"
 SSH_KEY = HOME / ".ssh/nebius-ed25519"
 SSH_USER = "dev"
@@ -1825,6 +1826,7 @@ def _is_kubernetes_node(item: dict[str, Any]) -> bool:
     owner = re.sub(r"[^a-z0-9]", "", _service_owner(item).lower())
     labels = item.get("metadata", {}).get("labels") or item.get("labels") or {}
     node_group_labels = {
+        "mk8s-node-group-id",
         "nebius.com/node-group-id", "nebius.com/node-group",
         "mk8s.nebius.ai/node-group-id", "nebius.ai/node-group-id",
     }
@@ -1890,7 +1892,8 @@ def _visible_inventory(snapshot: dict[str, Any]) -> dict[str, Any]:
 def list_vms(*, force_refresh: bool = False) -> dict[str, Any]:
     tenant_id = profile_value("tenant-id")
     cached = _read_json(INVENTORY_FILE, {})
-    if cached.get("tenant_id") == tenant_id and not force_refresh:
+    if (cached.get("schema") == INVENTORY_SCHEMA
+            and cached.get("tenant_id") == tenant_id and not force_refresh):
         return _visible_inventory({**cached, "source": "cache", "cache_age_seconds": max(0, int(time.time() - INVENTORY_FILE.stat().st_mtime))})
     personal = sync_personal_projects(tenant_id)
     result: list[dict[str, Any]] = []
@@ -1924,7 +1927,7 @@ def list_vms(*, force_refresh: bool = False) -> dict[str, Any]:
     recovery = [item for item in _pending_launches() if item.get("project", {}).get("project_id") in projects]
     reusable = [item for item in _reusable_disks() if item.get("project", {}).get("project_id") in projects]
     snapshot = {
-        "schema": "nebius.inventory/v1", "tenant_id": tenant_id,
+        "schema": INVENTORY_SCHEMA, "tenant_id": tenant_id,
         "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(), "source": "live",
         "cache_age_seconds": 0, "vms": result, "errors": errors, "recovery": recovery, "reusable_disks": reusable,
         "personal_project_count": len(personal["projects"]),
