@@ -5,6 +5,8 @@
 - Managed Kubernetes worker nodes are hidden from VM listings and the running-VM
   badge by default. **E · Settings** can include them as clearly identified,
   cluster-managed resources without direct VM lifecycle actions.
+- Recognize the current `mk8s-node-group-id` worker label and automatically
+  replace inventories cached before Kubernetes classification was introduced.
 - SSH sessions now open with the configured terminal's native application
   identity, so Omarchy's universal Super+C and Super+V shortcuts keep working
   after connecting to a VM.

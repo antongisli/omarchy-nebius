@@ -314,7 +314,30 @@ class ComputeTests(unittest.TestCase):
         self.assertFalse(summary["can_delete"])
         labelled = {"metadata": {"labels": {"nebius.com/node-group-id": "mk8snodegroup-workers"}}, "status": {}}
         self.assertTrue(core._is_kubernetes_node(labelled))
+        current_label = {"metadata": {"labels": {"mk8s-node-group-id": "mk8snodegroup-workers"}}, "status": {}}
+        self.assertTrue(core._is_kubernetes_node(current_label))
         self.assertFalse(core._is_kubernetes_node({"metadata": {"name": "kubernetes-demo"}, "status": {}}))
+
+    def test_inventory_from_before_kubernetes_classification_is_refreshed(self):
+        core._atomic_json(core.INVENTORY_FILE, {
+            "schema": "nebius.inventory/v1", "tenant_id": "tenant-test",
+            "vms": [{"id": "computeinstance-stale", "name": "stale worker"}],
+        })
+        node = {
+            "metadata": {"id": "computeinstance-node", "name": "worker", "labels": {
+                "mk8s-node-group-id": "mk8snodegroup-workers",
+            }},
+            "spec": {"resources": {}}, "status": {"state": "RUNNING"},
+        }
+        personal = {"projects": [PROJECT], "hidden_shared_project_count": 0}
+        with patch.object(core, "sync_personal_projects", return_value=personal), \
+             patch.object(core, "run_cli", return_value={"items": [node]}) as cli:
+            result = core.list_vms()
+        self.assertEqual(result["vms"], [])
+        self.assertEqual(result["hidden_kubernetes_node_count"], 1)
+        self.assertEqual(result["source"], "live")
+        self.assertEqual(core._read_json(core.INVENTORY_FILE, {})["schema"], core.INVENTORY_SCHEMA)
+        cli.assert_called_once()
 
     def test_service_managed_vm_lifecycle_is_not_exposed_as_direct_compute(self):
         vm = {"id": "computeinstance-node", "name": "worker", "service_managed_by": "mk8snodegroup-workers"}
