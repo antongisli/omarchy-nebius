@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Window
 import Quickshell
-import "plugin/qml/v078" as Plugin
+import "plugin/qml/v079" as Plugin
 
 // Run only with QT_QPA_PLATFORM=offscreen. No cloud polling or desktop window.
 ShellRoot {

@@ -85,6 +85,7 @@ def menu_shortcuts(rows, actions):
                  "allocation": "p", "project": "l", "review": "r", "reuse": "u",
                  "repair": "f", "recover": "r", "archive": "a", "__new": "n",
                  "overview": "v", "get": "g", "capacity": "c", "activity": "a", "account": "s"}
+    preferred["preferences"] = "e"
     used = {k.lower() for k in actions} | {"j", "k", "q"}
     result = {}
     for index, row in enumerate(rows):
@@ -293,7 +294,8 @@ class App:
                          "add": "add port", "open": "browser", "copy": "copy", "pause": "pause", "resume": "retry",
                          "remove": "remove", "name": "name", "allocation": "switch", "project": "project",
                          "review": "review", "get": "GPU", "overview": "VMs", "capacity": "capacity",
-                         "activity": "activity", "account": "account", "jump": "jump", "__new": "new project"}
+                         "activity": "activity", "account": "account", "jump": "jump", "preferences": "settings",
+                         "__new": "new project"}
             for index, key in shortcuts.items():
                 if not key.isdigit():
                     value = filtered[index][2]
@@ -1170,12 +1172,13 @@ class App:
                 raise core.NebiusError("This saved recovery state changed. Refresh Your VMs")
             self.recovery_actions(request)
             return
+        service_managed = bool(vm.get("service_managed_by") or vm.get("kubernetes_node"))
         rows = [("Operation progress", "Follow the operation already in progress", "operation")] if vm.get("operation_job_id") else []
-        if vm["state"] == "running":
+        if not service_managed and vm["state"] == "running":
             rows += [("Check SSH and connect", "Open a session only after login succeeds", "connect"), ("Stop VM", "Compute stops; disks remain billable", "stop")]
-        elif vm["state"] == "stopped":
+        elif not service_managed and vm["state"] == "stopped":
             rows += [("Start VM", "Resume billing and wait for its address", "start")]
-        if not vm.get("instance_deleted"):
+        if not vm.get("instance_deleted") and not service_managed:
             rows += [("SSH port forwarding", "Open remote apps at localhost; manage saved ports", "ports")]
             rows += [("Connection settings", "Edit the saved SSH username", "settings")]
         rows = [(*row, "VM actions") for row in rows]
@@ -1188,7 +1191,8 @@ class App:
                       "Permanent deletion; disk charges continue until removed", "delete", "Delete")]
         if action is None:
             action = self.menu(vm["name"], rows, subtitle=f"{vm['state']} · {vm['region']} · {allocation_label(vm['allocation'])}",
-                               notes=[vm["project_name"]])
+                               notes=(["Kubernetes manages this node's lifecycle; use the cluster rather than Compute VM actions."]
+                                      if vm.get("kubernetes_node") else [vm["project_name"]]))
         elif action not in {row[2] for row in rows}:
             self.message("Action unavailable", "This action is not available for " + vm["name"] + " in its current state.")
             return
@@ -1297,9 +1301,14 @@ class App:
             refresh = False
             displayed = inventory_view.apply_jobs(self.inventory, entries)
             vms = [vm for vm in displayed.get("vms", []) if not jump or vm["state"] == "running" or vm.get("operation_job_id")]
-            rows = [(f"{vm['name']} · {vm['state'].upper()}" + (" · saved state" if vm.get("stale") else ""),
-                     f"{catalog.gpu_name(vm['platform'])} · {vm['region']} · {allocation_label(vm['allocation'])}\n"
-                     f"Project: {vm['project_name']}" + ("\n" + vm["operation_note"] if vm.get("operation_note") else ""), vm, "Virtual machines") for vm in vms]
+            rows = []
+            for vm in vms:
+                detail = (f"{catalog.gpu_name(vm['platform'])} · {vm['region']} · {allocation_label(vm['allocation'])}\n"
+                          f"Project: {vm['project_name']}" + ("\n" + vm["operation_note"] if vm.get("operation_note") else ""))
+                if vm.get("kubernetes_node"):
+                    detail = "Kubernetes node · lifecycle managed by its cluster\n" + detail
+                rows.append((f"{vm['name']} · {vm['state'].upper()}" + (" · saved state" if vm.get("stale") else ""),
+                             detail, vm, "Virtual machines"))
             if not jump:
                 rows += [(item["name"] + " · LAUNCH UNCONFIRMED", item["project"]["region"] + " · check this request; not a VM health status", {"recovery": item}, "Launch requests")
                          for item in displayed.get("recovery", [])]
@@ -1312,6 +1321,9 @@ class App:
                 notes += ["Operation in progress · A to follow it"]
             if self.inventory.get("errors"):
                 notes += ["Some projects could not be read. R retries; I shows details."]
+            hidden_nodes = int(displayed.get("hidden_kubernetes_node_count") or 0)
+            if hidden_nodes:
+                notes += [f"{hidden_nodes} Kubernetes node{'s' if hidden_nodes != 1 else ''} hidden · E opens Settings."]
             if poller.error:
                 notes += ["Refresh failed; showing saved VMs. Retrying automatically. " + poller.error]
             return rows
@@ -1328,8 +1340,9 @@ class App:
                              "s": lambda vm: {"vm_action": "stop", "vm": vm},
                              "t": lambda vm: {"vm_action": "start", "vm": vm},
                              "c": lambda vm: {"vm_action": "connect", "vm": vm},
-                             "a": "__activity", "r": "__refresh", "g": "__get", "i": "__errors", "m": lambda vm: {"manage": vm}},
-                    footer="↑↓ / j k move   " + ("Enter SSH" if jump else "Enter actions") + "   P ports   D delete   S stop   T start   C SSH   A activity   R refresh   G GPU   I info   M actions   Esc home")
+                             "a": "__activity", "r": "__refresh", "g": "__get", "i": "__errors", "e": "__preferences",
+                             "m": lambda vm: {"manage": vm}},
+                    footer="↑↓ / j k move   " + ("Enter SSH" if jump else "Enter actions") + "   P ports   D delete   S stop   T start   C SSH   A activity   R refresh   G GPU   I info   E settings   M actions   Esc home")
                 target = choice.get("vm", choice.get("manage", choice)) if isinstance(choice, dict) else None
                 if isinstance(target, dict) and target.get("id"):
                     selected_id = target["id"]
@@ -1346,6 +1359,12 @@ class App:
                     refresh = True
                 elif choice == "__errors":
                     self.message("Discovery details", json.dumps(self.inventory.get("errors") or ["All personal projects loaded."], indent=2))
+                elif choice == "__preferences":
+                    try:
+                        self.preferences()
+                    except Back:
+                        pass
+                    self.inventory = self.read("Applying VM visibility", "list")
                 elif choice == "__overview":
                     jump = False
                 elif isinstance(choice, dict) and choice.get("recovery"):
@@ -1492,6 +1511,25 @@ class App:
             except (core.NebiusError, OSError) as error:
                 self.message("Shortcut not saved", str(error), error=True)
 
+    def preferences(self):
+        while True:
+            current = core.inventory_preferences()["include_kubernetes_nodes"]
+            state = "SHOWN" if current else "HIDDEN"
+            choice = self.menu("Settings", [
+                ("Kubernetes nodes  [ " + state + " ]",
+                 "Include cluster worker VMs in Your VMs, SSH choices and the running-VM badge"
+                 if current else "Keep cluster worker VMs out of Your VMs, SSH choices and the running-VM badge",
+                 "kubernetes"),
+            ], subtitle="VM visibility", notes=[
+                "Kubernetes nodes are hidden by default. When shown, they are identified as cluster-managed and have no direct lifecycle actions."
+            ], actions={"i": "kubernetes"},
+                footer="↑↓ / j k move   Enter toggle   I include / hide Kubernetes nodes   Esc back")
+            if choice == "kubernetes":
+                updated = core.set_include_kubernetes_nodes(not current)
+                self.inventory = {}
+                self.notice = ("Kubernetes nodes are now shown." if updated["include_kubernetes_nodes"]
+                               else "Kubernetes nodes are now hidden.")
+
     def account(self):
         curses.def_prog_mode()
         curses.endwin()
@@ -1522,6 +1560,8 @@ class App:
                     self.account()
                 elif entry == "shortcuts":
                     self.keyboard_shortcuts()
+                elif entry in {"settings", "preferences"}:
+                    self.preferences()
             except Background:
                 entry = "overview"
                 continue
@@ -1542,9 +1582,10 @@ class App:
                     ("[P] SSH port forwarding", "Open remote apps locally; add, pause or remove ports", "ports", "Manage"),
                     ("[A] Activity", "Follow concurrent operations and inspect results", "activity", "Manage"),
                     ("[S] Account / reconnect", "Connect your Nebius account and tools", "account", "Account"),
+                    ("[E] Settings", "Choose which cloud VMs appear in listings and counts", "preferences", "Settings"),
                     ("[Shift+K] Shortcuts", "Choose the key that opens Nebius", "shortcuts", "Settings"),
                 ], subtitle="Your projects · keyboard first", notes=[note] if note else [],
-                    actions={"g": "get", "J": "jump", "v": "overview", "c": "capacity", "a": "activity", "s": "account", "p": "ports", "K": "shortcuts"},
+                    actions={"g": "get", "J": "jump", "v": "overview", "c": "capacity", "a": "activity", "s": "account", "p": "ports", "e": "preferences", "K": "shortcuts"},
                     footer="↑↓ / j k move   Enter select   G get GPU   Shift+J jump   V VMs   C capacity   Esc quit")
             except Back:
                 return
@@ -1552,7 +1593,7 @@ class App:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("screen", nargs="?", default="home", choices=("home", "get", "capacity", "overview", "jump", "activity", "ports", "connect", "shortcuts"))
+    parser.add_argument("screen", nargs="?", default="home", choices=("home", "get", "capacity", "overview", "jump", "activity", "ports", "connect", "shortcuts", "settings"))
     parser.add_argument("--vm-id")
     parser.add_argument("--username")
     args = parser.parse_args()

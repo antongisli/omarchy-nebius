@@ -28,6 +28,7 @@ Out of VRAM in **ComfyUI**? Trying a bigger model with **vLLM** or **Open WebUI*
 - ⌨️ **Keyboard-native.** Launch, SSH, start, stop and review deletion. No command strings to memorize.
 - 🔌 **Your app, at localhost.** Saved SSH port forwards reconnect after sleep or network changes.
 - 📊 **Know what's running.** A live VM-count badge, background progress and persistent results.
+- 🧹 **Keep cluster noise out.** Kubernetes worker nodes stay hidden by default; **E · Settings** can show them.
 - 🤖 **Ask your agent.** Nebius tools for both Codex and Claude Code.
 - 🛡️ **Review before launch.** Preflight checks, price estimates and confirmation before creating resources.
 
@@ -79,6 +80,7 @@ From the Nebius panel:
 | **Shift+J** | Jump into a VM | **A** | Activity |
 | **V** | Your VMs | **S** | Set up / reconnect |
 | **C** | GPU capacity | **U** | Uninstall plugin |
+| **E** | Settings | **Shift+K** | Opening shortcut |
 
 Navigate with **arrows / j/k**, **Enter** and **Esc**. **/** searches; **?** shows help. **Shift+J** opens Jump in both the panel and terminal. In GPU menus, **P** switches allocation type.
 

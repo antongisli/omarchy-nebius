@@ -34,7 +34,8 @@ class ComputeTests(unittest.TestCase):
             "STATE_DIR": state, "PLAN_DIR": state / "plans", "REGISTRY_FILE": state / "vms.json",
             "OPERATION_FILE": state / "operation.json", "PROJECTS_FILE": state / "projects.json",
             "CAPACITY_FILE": state / "capacity.json", "INVENTORY_FILE": state / "inventory.json",
-            "CONNECTIONS_FILE": state / "connections.json", "SSH_KEY": state / "id_key",
+            "CONNECTIONS_FILE": state / "connections.json", "PREFERENCES_FILE": state / "preferences.json",
+            "SSH_KEY": state / "id_key",
         }.items():
             p = patch.object(core, key, value)
             p.start()
@@ -286,6 +287,44 @@ class ComputeTests(unittest.TestCase):
             vm = core.list_vms(force_refresh=True)["vms"][0]
             self.assertEqual(vm["state"], "disk remains")
             self.assertTrue(vm["can_delete"])
+
+    def test_kubernetes_nodes_are_hidden_by_default_and_can_be_included(self):
+        normal = {"id": "computeinstance-normal", "state": "running", "service_managed_by": "",
+                  "kubernetes_node": False}
+        node = {"id": "computeinstance-node", "state": "running",
+                "service_managed_by": "mk8snodegroup-workers", "kubernetes_node": True}
+        snapshot = {"vms": [normal, node]}
+
+        hidden = core._visible_inventory(snapshot)
+        self.assertEqual(hidden["vms"], [normal])
+        self.assertEqual(hidden["hidden_kubernetes_node_count"], 1)
+        self.assertFalse(hidden["include_kubernetes_nodes"])
+
+        core.set_include_kubernetes_nodes(True)
+        shown = core._visible_inventory(snapshot)
+        self.assertEqual(shown["vms"], [normal, node])
+        self.assertEqual(shown["hidden_kubernetes_node_count"], 0)
+        self.assertTrue(shown["include_kubernetes_nodes"])
+
+    def test_kubernetes_owner_is_detected_without_name_heuristics(self):
+        base = {"metadata": {"id": "computeinstance-test", "name": "ordinary-looking"},
+                "spec": {"resources": {}}, "status": {"managed_by": "mk8snodegroup-workers"}}
+        summary = core._vm_summary(base, PROJECT)
+        self.assertTrue(summary["kubernetes_node"])
+        self.assertFalse(summary["can_delete"])
+        labelled = {"metadata": {"labels": {"nebius.com/node-group-id": "mk8snodegroup-workers"}}, "status": {}}
+        self.assertTrue(core._is_kubernetes_node(labelled))
+        self.assertFalse(core._is_kubernetes_node({"metadata": {"name": "kubernetes-demo"}, "status": {}}))
+
+    def test_service_managed_vm_lifecycle_is_not_exposed_as_direct_compute(self):
+        vm = {"id": "computeinstance-node", "name": "worker", "service_managed_by": "mk8snodegroup-workers"}
+        with patch.object(core, "_accessible_vm", return_value=({}, vm)), \
+             patch.object(core, "_compute_mutation") as mutate:
+            with self.assertRaisesRegex(core.NebiusError, "managed by another Nebius service"):
+                core.stop_vm(vm["id"])
+            with self.assertRaisesRegex(core.NebiusError, "managed by another Nebius service"):
+                core.start_vm(vm["id"])
+        mutate.assert_not_called()
 
     def test_dry_run_does_not_generate_key_or_mutate_cloud(self):
         plan = self.plan()

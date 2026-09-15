@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Window
 import Quickshell
-import "plugin/qml/v078" as Plugin
+import "plugin/qml/v079" as Plugin
 
 // Headless artwork: actual widget content, synthetic state, no cloud polling.
 ShellRoot {

@@ -69,6 +69,12 @@ class WidgetCopyTests(unittest.TestCase):
         self.assertIn('"RECONNECT"', widget)
         self.assertIn("Press S or Enter to reconnect.", widget)
 
+    def test_settings_are_available_from_the_widget(self):
+        entrypoint = json.loads((ROOT / "manifest.json").read_text())["entryPoints"]["barWidget"]
+        widget = (ROOT / entrypoint).read_text()
+        self.assertIn('{ key: "E", title: "Settings", screen: "settings" }', widget)
+        self.assertIn('function settings(): string { root.launch("settings")', widget)
+
 
 class CountTests(unittest.TestCase):
     def snapshot(self, **kwargs):

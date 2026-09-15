@@ -7,7 +7,7 @@ import qs.Ui
 
 // Omarchy-native widget: running VM count, local uninstall, and compact actions.
 // Version the entry-point path so plugin updates bypass Omarchy's QML cache.
-// Full tasks run in a tiled terminal with persistent keyboard hints and progress.
+// Full tasks and settings run in a tiled terminal with persistent keyboard hints and progress.
 Panel {
   id: root
   moduleName: "nebius"
@@ -54,12 +54,14 @@ Panel {
     { key: "C", title: "GPU capacity", screen: "capacity" },
     { key: "A", title: "Activity", screen: "activity" },
     { key: "S", title: "Account / reconnect", screen: "setup" },
+    { key: "E", title: "Settings", screen: "settings" },
     { key: "K", keyLabel: "Shift+K", title: "Shortcuts", screen: "shortcuts" },
     { key: "U", title: "Uninstall Nebius plugin", screen: "uninstall" }
   ] : [
     { key: "S", title: needsReconnect ? "Reconnect account" : "Set up Nebius", screen: "setup" },
     { key: "P", title: "SSH port forwarding", screen: "ports" },
     { key: "A", title: "Activity", screen: "activity" },
+    { key: "E", title: "Settings", screen: "settings" },
     { key: "K", keyLabel: "Shift+K", title: "Shortcuts", screen: "shortcuts" },
     { key: "U", title: "Uninstall Nebius plugin", screen: "uninstall" }
   ]
@@ -175,6 +177,7 @@ Panel {
     function activity(): string { root.launch("activity"); return "ok" }
     function uninstall(): string { root.launch("uninstall"); return "ok" }
     function shortcuts(): string { root.launch("shortcuts"); return "ok" }
+    function settings(): string { root.launch("settings"); return "ok" }
   }
   BarIconButton {
     id: button

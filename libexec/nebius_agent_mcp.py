@@ -43,7 +43,8 @@ INSTRUCTIONS = (
     "personal project, offer to create one and explain that it remains even if VM creation is canceled. Treat project "
     "as a secondary placement choice. Let the user edit a proposed name and choose on-demand or preemptible allocation. "
     "Run check_vm_quota before creating a project. A plan with preflight.ready=false cannot be created. "
-    "list_vms includes existing VMs in personal projects; connecting may need a username and the user's SSH keys. "
+    "list_vms includes existing VMs in personal projects and hides Managed Kubernetes nodes unless the user enabled them in plugin Settings. "
+    "If hidden_kubernetes_node_count is nonzero, say that cluster nodes are omitted. Connecting may need a username and the user's SSH keys. "
     "If list_vms returns recovery entries, explain the uncertain launch and offer recover_launch before any retry. "
     "For a known local JSON or explicit preemptible admission rejection, repair_rejected_launches can verify and clear the false block without cloud mutations. "
     "Preflight rechecks live platform eligibility, preset, subnet, image, names and reported quotas before disk allocation. It is not a capacity reservation. "
@@ -110,7 +111,7 @@ TOOLS = [
     ),
     tool(
         "list_vms",
-        "List VMs across personal projects with state, region, GPU, allocation and SSH details. Set refresh to retrieve current state.",
+        "List visible VMs across personal projects with state, region, GPU, allocation and SSH details. Managed Kubernetes nodes are hidden by default in plugin Settings. Set refresh to retrieve current state.",
         {"refresh": {"type": "boolean"}},
         [],
         read_only=True,

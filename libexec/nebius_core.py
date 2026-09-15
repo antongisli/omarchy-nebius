@@ -39,6 +39,7 @@ CAPACITY_FILE = STATE_DIR / "capacity.json"
 PROJECTS_FILE = STATE_DIR / "projects.json"
 INVENTORY_FILE = STATE_DIR / "inventory.json"
 CONNECTIONS_FILE = STATE_DIR / "connections.json"
+PREFERENCES_FILE = STATE_DIR / "preferences.json"
 CREDENTIALS_FILE = HOME / ".nebius/credentials.yaml"
 SSH_KEY = HOME / ".ssh/nebius-ed25519"
 SSH_USER = "dev"
@@ -182,6 +183,23 @@ def _read_json(path: Path, default: Any) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return default
+
+
+def inventory_preferences() -> dict[str, bool]:
+    """Return validated local display preferences with conservative defaults."""
+    saved = _read_json(PREFERENCES_FILE, {})
+    return {"include_kubernetes_nodes": isinstance(saved, dict) and saved.get("include_kubernetes_nodes") is True}
+
+
+def set_include_kubernetes_nodes(include: bool) -> dict[str, bool]:
+    if not isinstance(include, bool):
+        raise NebiusError("Kubernetes node visibility must be on or off")
+    saved = _read_json(PREFERENCES_FILE, {})
+    if not isinstance(saved, dict):
+        saved = {}
+    saved.update(schema="nebius.omarchy-preferences/v1", include_kubernetes_nodes=include)
+    _atomic_json(PREFERENCES_FILE, saved)
+    return inventory_preferences()
 
 
 def _run(command: list[str], *, timeout: int = 90, input_text: str | None = None) -> str:
@@ -1798,6 +1816,22 @@ def ssh_identity_options(connection: dict[str, Any]) -> list[str]:
     return []
 
 
+def _service_owner(item: dict[str, Any]) -> str:
+    return str(item.get("service_managed_by") or item.get("status", {}).get("managed_by") or "")
+
+
+def _is_kubernetes_node(item: dict[str, Any]) -> bool:
+    """Recognize released Managed Kubernetes ownership without guessing from names."""
+    owner = re.sub(r"[^a-z0-9]", "", _service_owner(item).lower())
+    labels = item.get("metadata", {}).get("labels") or item.get("labels") or {}
+    node_group_labels = {
+        "nebius.com/node-group-id", "nebius.com/node-group",
+        "mk8s.nebius.ai/node-group-id", "nebius.ai/node-group-id",
+    }
+    return (owner == "nodegroup" or "mk8snodegroup" in owner
+            or any(labels.get(key) for key in node_group_labels))
+
+
 def _vm_summary(item: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
     metadata, spec, status = (item.get(key, {}) for key in ("metadata", "spec", "status"))
     vm_id = str(metadata.get("id") or "")
@@ -1813,6 +1847,8 @@ def _vm_summary(item: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]
                         and pending["project"]["project_id"] == project["project_id"]
                         and (metadata.get("labels") or {}).get("managed-by") == MANAGED_BY), None)
     resources = spec.get("resources", {})
+    service_owner = _service_owner(item)
+    kubernetes_node = _is_kubernetes_node(item)
     connections = _read_json(CONNECTIONS_FILE, {})
     username = connections.get(vm_id, {}).get("username") or registered.get("ssh_user") or ""
     if not username:
@@ -1825,10 +1861,29 @@ def _vm_summary(item: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]
         "platform": resources.get("platform") or "CPU", "preset": resources.get("preset") or "",
         "allocation": "preemptible" if spec.get("preemptible") else "on_demand",
         "public_ip": public_ip, "private_ip": private_ip, "ssh_user": username,
-        "managed": managed, "can_delete": not bool(status.get("managed_by") or spec.get("forbid_deletion")),
+        "managed": managed, "service_managed_by": service_owner,
+        "kubernetes_node": kubernetes_node,
+        "can_delete": not bool(service_owner or kubernetes_node or spec.get("forbid_deletion")),
         "disk_id": spec.get("boot_disk", {}).get("existing_disk", {}).get("id", ""),
         "recovery_id": recovery_id,
         "ssh_identity": ssh_identity_for_instance(item),
+    }
+
+
+def _visible_inventory(snapshot: dict[str, Any]) -> dict[str, Any]:
+    include = inventory_preferences()["include_kubernetes_nodes"]
+    vms = snapshot.get("vms")
+    if not isinstance(vms, list):
+        return {**snapshot, "include_kubernetes_nodes": include, "hidden_kubernetes_node_count": 0}
+    kubernetes = [vm for vm in vms if isinstance(vm, dict) and (vm.get("kubernetes_node") is True or _is_kubernetes_node(vm))]
+    visible = vms if include else [vm for vm in vms
+                                   if not (isinstance(vm, dict)
+                                           and (vm.get("kubernetes_node") is True or _is_kubernetes_node(vm)))]
+    return {
+        **snapshot,
+        "vms": visible,
+        "include_kubernetes_nodes": include,
+        "hidden_kubernetes_node_count": 0 if include else len(kubernetes),
     }
 
 
@@ -1836,7 +1891,7 @@ def list_vms(*, force_refresh: bool = False) -> dict[str, Any]:
     tenant_id = profile_value("tenant-id")
     cached = _read_json(INVENTORY_FILE, {})
     if cached.get("tenant_id") == tenant_id and not force_refresh:
-        return {**cached, "source": "cache", "cache_age_seconds": max(0, int(time.time() - INVENTORY_FILE.stat().st_mtime))}
+        return _visible_inventory({**cached, "source": "cache", "cache_age_seconds": max(0, int(time.time() - INVENTORY_FILE.stat().st_mtime))})
     personal = sync_personal_projects(tenant_id)
     result: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
@@ -1876,7 +1931,7 @@ def list_vms(*, force_refresh: bool = False) -> dict[str, Any]:
         "hidden_shared_project_count": personal["hidden_shared_project_count"],
     }
     _atomic_json(INVENTORY_FILE, snapshot)
-    return snapshot
+    return _visible_inventory(snapshot)
 
 
 def _accessible_vm(vm_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1889,6 +1944,11 @@ def _accessible_vm(vm_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
     if not project:
         raise NebiusError("This VM is outside your personal projects in the selected tenant")
     return instance, _vm_summary(instance, project)
+
+
+def _require_direct_lifecycle(vm: dict[str, Any]) -> None:
+    if vm.get("service_managed_by") or vm.get("kubernetes_node"):
+        raise NebiusError("This VM is managed by another Nebius service. Use that service to change its lifecycle")
 
 
 def live_vm_count(*, force_refresh: bool = False) -> dict[str, Any]:
@@ -2008,6 +2068,7 @@ def stop_vm(vm_id: str, *, automatic: bool = False) -> dict[str, Any]:
         # Compatibility safety fence for any obsolete service left installed.
         return {"id": vm_id, "skipped": True, "reason": "Auto-stop has been removed; no cloud request was sent"}
     _, vm = _accessible_vm(vm_id)
+    _require_direct_lifecycle(vm)
     _write_operation("running", "stop", f"Stopping {vm['name']}", vm_id=vm_id)
     _compute_mutation("instance", "stop", vm_id)
     _write_operation("ready", "stop", f"{vm['name']} is stopped", vm_id=vm_id)
@@ -2017,6 +2078,7 @@ def stop_vm(vm_id: str, *, automatic: bool = False) -> dict[str, Any]:
 @cloud_mutation
 def start_vm(vm_id: str) -> dict[str, Any]:
     _, vm = _accessible_vm(vm_id)
+    _require_direct_lifecycle(vm)
     _write_operation("running", "start", f"Starting {vm['name']}", vm_id=vm_id)
     _compute_mutation("instance", "start", vm_id)
     _write_operation("running", "boot", "VM started; waiting for its address", vm_id=vm_id, name=vm["name"])
