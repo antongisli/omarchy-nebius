@@ -77,14 +77,14 @@ From the Nebius panel:
 | Key | Action | Key | Action |
 | --- | --- | --- | --- |
 | **G** | Get a GPU | **P** | Port forwarding |
-| **Shift+J** | Jump into a VM | **A** | Activity |
-| **V** | Your VMs | **S** | Set up / reconnect |
-| **C** | GPU capacity | **U** | Uninstall plugin |
+| **V** | Your VMs | **C** | GPU capacity |
+| **A** | Activity | **S** | Set up / reconnect |
+| **U** | Uninstall plugin |  |  |
 | **E** | Settings | **Shift+K** | Opening shortcut |
 
-Navigate with **arrows / j/k**, **Enter** and **Esc**. **/** searches; **?** shows help. **Shift+J** opens Jump in both the panel and terminal. In GPU menus, **P** switches allocation type.
+Navigate with **arrows / j/k**, **Enter** and **Esc**. **/** searches; **?** shows help. In **Your VMs**, highlight a running machine and press **C** to connect. In GPU menus, **P** switches allocation type.
 
-**Super+Ctrl+M** opens Nebius after setup, wherever its icon sits. Change it with **Shift+K · Shortcuts** in the panel or manager: arrows choose modifiers, type a key, Enter saves. Occupied keys are left alone. Optional [direct GPU / SSH bindings →](config/keybindings.lua)
+**Super+Ctrl+M** opens Nebius after setup, wherever its icon sits. Change it with **Shift+K · Shortcuts** in the panel or manager: arrows choose modifiers, type a key, Enter saves. Occupied keys are left alone. An optional [direct GPU binding →](config/keybindings.lua) is also available.
 
 ![VM overview with direct SSH, start, stop and deletion shortcuts](docs/screenshots/overview.png)
 

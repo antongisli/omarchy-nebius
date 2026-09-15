@@ -1284,11 +1284,11 @@ class App:
             ], json.dumps(disk, indent=2), title="Delete boot disk", action="delete permanently", confirm_key="d"):
                 self.mutate("Deleting unused boot disk", "delete-disk", "--disk-id", disk["disk_id"], "--confirmed")
 
-    def overview(self, jump=False):
+    def overview(self):
         with inventory_view.Poller() as poller:
-            return self._overview(jump, poller)
+            return self._overview(poller)
 
-    def _overview(self, jump, poller):
+    def _overview(self, poller):
         if not self.inventory:
             self.inventory = self.read("Discovering your VMs", "list", "--refresh")
         refresh = False
@@ -1300,7 +1300,7 @@ class App:
             self.inventory = poller.poll(self.inventory, entries, force=refresh)
             refresh = False
             displayed = inventory_view.apply_jobs(self.inventory, entries)
-            vms = [vm for vm in displayed.get("vms", []) if not jump or vm["state"] == "running" or vm.get("operation_job_id")]
+            vms = displayed.get("vms", [])
             rows = []
             for vm in vms:
                 detail = (f"{catalog.gpu_name(vm['platform'])} · {vm['region']} · {allocation_label(vm['allocation'])}\n"
@@ -1309,13 +1309,12 @@ class App:
                     detail = "Kubernetes node · lifecycle managed by its cluster\n" + detail
                 rows.append((f"{vm['name']} · {vm['state'].upper()}" + (" · saved state" if vm.get("stale") else ""),
                              detail, vm, "Virtual machines"))
-            if not jump:
-                rows += [(item["name"] + " · LAUNCH UNCONFIRMED", item["project"]["region"] + " · check this request; not a VM health status", {"recovery": item}, "Launch requests")
-                         for item in displayed.get("recovery", [])]
-                rows += [(item["name"] + " · BOOT DISK AVAILABLE", "No VM created · " + item["project"]["project_name"] + " · ready to reuse",
-                          {"reusable_disk": item}, "Saved boot disks") for item in displayed.get("reusable_disks", [])]
+            rows += [(item["name"] + " · LAUNCH UNCONFIRMED", item["project"]["region"] + " · check this request; not a VM health status", {"recovery": item}, "Launch requests")
+                     for item in displayed.get("recovery", [])]
+            rows += [(item["name"] + " · BOOT DISK AVAILABLE", "No VM created · " + item["project"]["project_name"] + " · ready to reuse",
+                      {"reusable_disk": item}, "Saved boot disks") for item in displayed.get("reusable_disks", [])]
             if not rows:
-                rows = [("Get a GPU VM", "No running VMs in your projects" if jump else "No VMs found in your projects", "__get")]
+                rows = [("Get a GPU VM", "No VMs found in your projects", "__get")]
             notes = [self.notice] if self.notice else []
             if any(job.get("phase") in {"queued", "running"} for job in entries):
                 notes += ["Operation in progress · A to follow it"]
@@ -1332,7 +1331,7 @@ class App:
             try:
                 selected_index = next((index for index, row in enumerate(rows) if isinstance(row[2], dict)
                                        and row[2].get("id") == selected_id), min(selected_index, len(rows) - 1)) if selected_id else selected_index
-                choice = self.menu("Jump into a VM" if jump else "Your VMs", live_rows,
+                choice = self.menu("Your VMs", live_rows,
                     subtitle=lambda: f"{len(vms)} VMs · Auto-refresh" + (" · refreshing…" if poller.process else ""),
                     notes=lambda: notes, selected=selected_index,
                     actions={"p": lambda vm: {"vm_action": "ports", "vm": vm},
@@ -1342,7 +1341,7 @@ class App:
                              "c": lambda vm: {"vm_action": "connect", "vm": vm},
                              "a": "__activity", "r": "__refresh", "g": "__get", "i": "__errors", "e": "__preferences",
                              "m": lambda vm: {"manage": vm}},
-                    footer="↑↓ / j k move   " + ("Enter SSH" if jump else "Enter actions") + "   P ports   D delete   S stop   T start   C SSH   A activity   R refresh   G GPU   I info   E settings   M actions   Esc home")
+                    footer="↑↓ / j k move   Enter actions   C SSH   P ports   D delete   S stop   T start   A activity   R refresh   G GPU   I info   E settings   Esc home")
                 target = choice.get("vm", choice.get("manage", choice)) if isinstance(choice, dict) else None
                 if isinstance(target, dict) and target.get("id"):
                     selected_id = target["id"]
@@ -1365,8 +1364,6 @@ class App:
                     except Back:
                         pass
                     self.inventory = self.read("Applying VM visibility", "list")
-                elif choice == "__overview":
-                    jump = False
                 elif isinstance(choice, dict) and choice.get("recovery"):
                     try:
                         self.recovery_actions(choice["recovery"])
@@ -1405,18 +1402,6 @@ class App:
                     except Back:
                         pass
                     refresh = True
-                elif jump:
-                    try:
-                        if choice.get("operation_job_id"):
-                            self.vm_actions(choice, action="operation")
-                            refresh = True
-                        elif choice.get("recovery_id"):
-                            self.vm_actions(choice)
-                            refresh = True
-                        else:
-                            self.open_ssh(choice)
-                    except Back:
-                        pass
                 else:
                     try:
                         self.vm_actions(choice)
@@ -1549,7 +1534,8 @@ class App:
                 elif entry == "capacity":
                     self.capacity_flow()
                 elif entry in {"overview", "jump"}:
-                    self.overview(entry == "jump")
+                    # "jump" remains a compatibility alias for old user bindings.
+                    self.overview()
                 elif entry == "activity":
                     self.activity()
                 elif entry == "ports":
@@ -1576,7 +1562,6 @@ class App:
                     note = core.explain_error(note)["message"] + " A opens details."
                 entry = self.menu("GPU manager", [
                     ("[G] Get a GPU VM", "Choose a GPU, review the cost, then create and connect", "get", "Create & connect"),
-                    ("[Shift+J] Jump into a VM", "Connect to a running machine over SSH", "jump", "Create & connect"),
                     ("[V] Your VMs", "View machines, connection settings and actions", "overview", "Manage"),
                     ("[C] GPU capacity", "Compare on-demand and preemptible availability", "capacity", "Manage"),
                     ("[P] SSH port forwarding", "Open remote apps locally; add, pause or remove ports", "ports", "Manage"),
@@ -1585,8 +1570,8 @@ class App:
                     ("[E] Settings", "Choose which cloud VMs appear in listings and counts", "preferences", "Settings"),
                     ("[Shift+K] Shortcuts", "Choose the key that opens Nebius", "shortcuts", "Settings"),
                 ], subtitle="Your projects · keyboard first", notes=[note] if note else [],
-                    actions={"g": "get", "J": "jump", "v": "overview", "c": "capacity", "a": "activity", "s": "account", "p": "ports", "e": "preferences", "K": "shortcuts"},
-                    footer="↑↓ / j k move   Enter select   G get GPU   Shift+J jump   V VMs   C capacity   Esc quit")
+                    actions={"g": "get", "v": "overview", "c": "capacity", "a": "activity", "s": "account", "p": "ports", "e": "preferences", "K": "shortcuts"},
+                    footer="↑↓ / j k move   Enter select   G get GPU   V VMs   C capacity   Esc quit")
             except Back:
                 return
 

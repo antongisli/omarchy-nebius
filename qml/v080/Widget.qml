@@ -48,7 +48,6 @@ Panel {
       + (busy ? "\nOperation in progress" : "")
   readonly property var actions: ready ? [
     { key: "G", title: "Get a GPU VM", screen: "get" },
-    { key: "J", keyLabel: "Shift+J", title: "Jump into a VM", screen: "jump" },
     { key: "P", title: "SSH port forwarding", screen: "ports" },
     { key: "V", title: "Your VMs", screen: "overview" },
     { key: "C", title: "GPU capacity", screen: "capacity" },
@@ -170,7 +169,8 @@ Panel {
     function status(): string { return JSON.stringify(Object.assign({}, root.snapshot, {vms: root.vmCount, vm_count_label: root.countLabel, vm_count_visible: root.countVisible, vm_badge_label: root.badgeLabel})) }
     function setup(): string { root.launch("setup"); return "ok" }
     function gpu(): string { root.launch("get"); return "ok" }
-    function jump(): string { root.launch("jump"); return "ok" }
+    // Compatibility for callers using the former action: open the single VM list.
+    function jump(): string { root.launch("overview"); return "ok" }
     function vms(): string { root.launch("overview"); return "ok" }
     function capacity(): string { root.launch("capacity"); return "ok" }
     function ports(): string { root.launch("ports"); return "ok" }
@@ -226,7 +226,7 @@ Panel {
     }
     tooltipText: root.barTooltip
     onPressed: function(buttonCode) {
-      if (buttonCode === Qt.MiddleButton) root.launch("jump")
+      if (buttonCode === Qt.MiddleButton) root.launch("overview")
       else root.toggle()
     }
   }

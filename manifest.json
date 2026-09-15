@@ -10,7 +10,7 @@
     "bar-widget"
   ],
   "entryPoints": {
-    "barWidget": "qml/v079/Widget.qml",
+    "barWidget": "qml/v080/Widget.qml",
     "uninstall": "bin/nebius-cleanup"
   },
   "barWidget": {
