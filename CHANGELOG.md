@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Managed Kubernetes worker nodes are hidden from VM listings and the running-VM
+  badge by default. **E · Settings** can include them as clearly identified,
+  cluster-managed resources without direct VM lifecycle actions.
 - SSH sessions now open with the configured terminal's native application
   identity, so Omarchy's universal Super+C and Super+V shortcuts keep working
   after connecting to a VM.

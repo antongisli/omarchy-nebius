@@ -3,6 +3,7 @@
 import curses
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 import unicodedata
@@ -166,6 +167,18 @@ class KeyboardTests(unittest.TestCase):
         application, screen = app(["\n"])
         application.menu("Your VMs", [("VM", "Running", "vm")])
         self.assertNotIn("Preemptible", screen.frames[-1])
+
+    def test_kubernetes_visibility_setting_is_keyboard_first_and_defaults_hidden(self):
+        application, screen = app(["i", "\x1b"], 80, 24)
+        with tempfile.TemporaryDirectory() as state, \
+             patch.object(ui.core, "PREFERENCES_FILE", Path(state) / "preferences.json"), \
+             self.assertRaises(ui.Back):
+            application.preferences()
+        rendered = "\n".join(screen.frames)
+        self.assertIn("Kubernetes nodes", rendered)
+        self.assertIn("HIDDEN", screen.frames[0])
+        self.assertIn("SHOWN", screen.frames[-1])
+        self.assertIn("[I]", screen.frames[-1])
 
     def test_long_rows_and_wide_characters_stay_inside_narrow_terminal(self):
         for width, height in [(48, 20), (80, 24), (120, 44)]:
