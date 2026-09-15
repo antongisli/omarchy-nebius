@@ -116,9 +116,9 @@ class KeyboardTests(unittest.TestCase):
         result = application.menu("Capacity", [("H100", "Finland", 1), ("H200", "Paris", 2), ("H200", "Kansas", 3)])
         self.assertEqual(result, 3)
 
-    def test_uppercase_jump_shortcut_does_not_conflict_with_j_navigation(self):
-        application, screen = app(["J"])
-        self.assertEqual(application.menu("Home", [("VM", "", "vm")], actions={"J": "jump"}), "jump")
+    def test_uppercase_shortcut_does_not_conflict_with_navigation(self):
+        application, screen = app(["K"])
+        self.assertEqual(application.menu("Home", [("VM", "", "vm")], actions={"K": "shortcuts"}), "shortcuts")
 
     def test_allocation_switch_is_available_without_selection(self):
         application, screen = app(["p"])
@@ -237,18 +237,18 @@ class KeyboardTests(unittest.TestCase):
         self.assertNotIn("Auto-stop", "\n".join(screen.frames))
         self.assertNotIn("old warning", "\n".join(screen.frames))
 
-    def test_manage_shortcut_targets_highlighted_vm_and_preserves_jump_hint(self):
-        application, screen = app([curses.KEY_DOWN, "M"], 48, 20)
-        value = application.menu("Jump into a VM", [("One", "", {"id": "one"}), ("Two", "", {"id": "two"})],
-                                 actions={"m": lambda vm: {"manage": vm}}, footer="Enter SSH   M actions   Esc back")
-        self.assertEqual(value, {"manage": {"id": "two"}})
-        self.assertIn("[Enter] SSH", screen.frames[-1])
-        self.assertIn("[M] actions", screen.frames[-1])
+    def test_connect_shortcut_targets_highlighted_vm_in_single_vm_list(self):
+        application, screen = app([curses.KEY_DOWN, "C"], 48, 20)
+        value = application.menu("Your VMs", [("One", "", {"id": "one"}), ("Two", "", {"id": "two"})],
+                                 actions={"c": lambda vm: {"connect": vm}}, footer="Enter actions   C SSH   Esc back")
+        self.assertEqual(value, {"connect": {"id": "two"}})
+        self.assertIn("[Enter] actions", screen.frames[-1])
+        self.assertIn("[C] SSH", screen.frames[-1])
 
     def test_manage_with_no_search_matches_does_not_return_an_invalid_selection(self):
         application, screen = app(["/", "z", "\n", "M", "\x1b"])
         with self.assertRaises(ui.Back):
-            application.menu("Jump", [("One", "", {"id": "one"})], actions={"m": lambda vm: {"manage": vm}})
+            application.menu("Your VMs", [("One", "", {"id": "one"})], actions={"m": lambda vm: {"manage": vm}})
 
     def test_delete_vm_enter_does_not_confirm_and_escape_cancels(self):
         application, screen = app(["d", "\n", "\x1b"])

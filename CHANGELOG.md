@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Removed the redundant **Jump into a VM** screen and Shift+J shortcut. **Your
+  VMs** is now the single machine list; highlight a running VM and press C to
+  connect. Existing external `jump` commands remain a compatibility alias.
 - Managed Kubernetes worker nodes are hidden from VM listings and the running-VM
   badge by default. **E · Settings** can include them as clearly identified,
   cluster-managed resources without direct VM lifecycle actions.

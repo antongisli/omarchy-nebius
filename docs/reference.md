@@ -112,7 +112,6 @@ Optional direct-action shortcuts are provided in [config/keybindings.lua](../con
 | Shortcut | Action |
 | --- | --- |
 | Super+Ctrl+G | Get a GPU VM |
-| Super+Ctrl+J | Jump into a running VM |
 
 They are not automatically installed elsewhere; check `omarchy menu keybindings --print` before adding them to your user `bindings.lua`. Existing shortcuts and packaged defaults are preserved.
 
@@ -123,9 +122,8 @@ Use arrows or `j/k`, Enter, Escape/back, and `/` search throughout the terminal.
 - `C` — view current GPU capacity.
 - `P` — SSH port forwarding in the launcher, manager or VM list. In capacity, configuration and VM settings, it toggles the highlighted **On-demand / Preemptible** switch instead. Capacity views update immediately from the same snapshot; use `R` for fresh data.
 - `G` — choose a GPU family, select its region/configuration, choose project placement, review, and confirm creation.
-- `Shift+J` — search running VMs and connect (lowercase `j` moves down).
-- `V` — overview, connect, start/stop; review deletion of VMs you created in visible personal projects.
-- In **Your VMs**, Enter opens the selected resource's actions. In **Jump**, Enter connects and `M` opens actions for the highlighted VM. Deletion has one review: Enter pages through the exact resources/data-loss warning, `D` confirms only after all terms are visible, and Esc cancels. Secondary disks are kept.
+- `V` — list VMs, connect, start/stop; review deletion of VMs you created in visible personal projects.
+- In **Your VMs**, `C` connects directly to the highlighted running VM and Enter opens its actions. Deletion has one review: Enter pages through the exact resources/data-loss warning, `D` confirms only after all terms are visible, and Esc cancels. Secondary disks are kept.
 - `A` — progress, result and full diagnostic details.
 - `S` — account/reconnect.
 - `E` — settings. Kubernetes worker nodes are hidden from VM listings, SSH choices and the running-VM badge by default. Toggle **Include Kubernetes nodes** to show them as cluster-managed resources; direct start, stop and deletion actions remain unavailable.
