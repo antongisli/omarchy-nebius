@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Independent VM launches can now run concurrently. Locks remain scoped around
+  each launch and shared resource, and only abandoned or uncertain requests—not
+  actively tracked creates—trigger recovery protection.
 - Removed the redundant **Jump into a VM** screen and Shift+J shortcut. **Your
   VMs** is now the single machine list; highlight a running VM and press C to
   connect. Existing external `jump` commands remain a compatibility alias.

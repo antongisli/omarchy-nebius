@@ -115,12 +115,40 @@ def mutation_guard(*, wait=False, resource="global"):
             _mutation_state.owned = owned
 
 
+def mutation_resource(arguments: list[str]) -> str:
+    """Choose the narrowest safe lock for a background mutation."""
+    if not arguments:
+        return "global"
+    command = arguments[0]
+    if command in {"start", "stop", "delete"} and "--vm-id" in arguments:
+        try:
+            return arguments[arguments.index("--vm-id") + 1]
+        except IndexError:
+            return "global"
+    if command == "create" and "--plan-id" in arguments:
+        try:
+            plan_id = arguments[arguments.index("--plan-id") + 1]
+        except IndexError:
+            return "global"
+        if not re.fullmatch(r"[A-Za-z0-9_-]{20,40}", plan_id):
+            return "global"
+        plan = _read_json(PLAN_DIR / f"{plan_id}.json", {})
+        disk_id = (plan.get("reusable_disk") or {}).get("disk_id") if isinstance(plan, dict) else None
+        if isinstance(disk_id, str) and re.fullmatch(r"computedisk-[a-z0-9-]+", disk_id):
+            return disk_id
+        return "launch-" + plan_id
+    return "global"
+
+
 def cloud_mutation(function):
     @functools.wraps(function)
     def locked(*args, **kwargs):
         key = "global"
         if function.__name__ in {"start_vm", "stop_vm", "delete_vm"}:
             key = str(args[0] if args else kwargs["vm_id"])
+        elif function.__name__ == "create_gpu_vm":
+            plan_id = str(args[0] if args else kwargs["plan_id"])
+            key = mutation_resource(["create", "--plan-id", plan_id])
         with mutation_guard(wait=bool(kwargs.get("automatic")), resource=key):
             return function(*args, **kwargs)
     return locked
@@ -1144,17 +1172,18 @@ def plan_gpu_vm(
 
 
 def ensure_ssh_key() -> None:
-    public_key = SSH_KEY.with_suffix(".pub")
-    if SSH_KEY.is_file() and public_key.is_file():
-        return
-    SSH_KEY.parent.mkdir(parents=True, exist_ok=True)
-    SSH_KEY.parent.chmod(0o700)
-    _run(
-        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "Omarchy Nebius", "-f", str(SSH_KEY)],
-        timeout=30,
-    )
-    SSH_KEY.chmod(0o600)
-    public_key.chmod(0o644)
+    with mutation_guard(wait=True, resource="ssh-key"):
+        public_key = SSH_KEY.with_suffix(".pub")
+        if SSH_KEY.is_file() and public_key.is_file():
+            return
+        SSH_KEY.parent.mkdir(parents=True, exist_ok=True)
+        SSH_KEY.parent.chmod(0o700)
+        _run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "Omarchy Nebius", "-f", str(SSH_KEY)],
+            timeout=30,
+        )
+        SSH_KEY.chmod(0o600)
+        public_key.chmod(0o644)
 
 
 def _cloud_init() -> str:
@@ -1222,6 +1251,24 @@ def _pending_path(request_id: str) -> Path:
 def _pending_launches() -> list[dict[str, Any]]:
     return [value for path in (STATE_DIR / "pending").glob("*.json")
             if isinstance(value := _read_json(path, None), dict) and value.get("plan_id")]
+
+
+def _pending_launch_needs_recovery(plan: dict[str, Any]) -> bool:
+    """An owned worker is in progress; only abandoned/uncertain requests block retries."""
+    job_id = str(plan.get("operation_job_id") or "")
+    if not re.fullmatch(r"[a-f0-9]{24}", job_id):
+        return True
+    job = _read_json(STATE_DIR / "jobs" / f"{job_id}.json", {})
+    if job.get("phase") not in {"queued", "running"}:
+        return True
+    try:
+        with (STATE_DIR / ("job-" + job_id + ".lock")).open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+    except BlockingIOError:
+        return False
+    except OSError:
+        return True
 
 
 def _reusable_path(disk_id: str) -> Path:
@@ -1609,7 +1656,8 @@ def create_gpu_vm(plan_id: str, *, dry_run: bool = False) -> dict[str, Any]:
 
     if plan.get("submitted_at"):
         raise NebiusError("This plan has already been submitted. Check the overview before starting a new one.")
-    if any(item.get("project", {}).get("project_id") == planned_project["project_id"] for item in _pending_launches()):
+    if any(item.get("project", {}).get("project_id") == planned_project["project_id"]
+           and _pending_launch_needs_recovery(item) for item in _pending_launches()):
         raise NebiusError("An earlier launch in this project needs recovery. Open Your VMs before creating another.")
     reusable = plan.get("reusable_disk")
     if reusable:
@@ -1638,6 +1686,9 @@ def create_gpu_vm(plan_id: str, *, dry_run: bool = False) -> dict[str, Any]:
                          name=plan["name"], project=planned_project, preflight=plan.get("preflight"))
         raise NebiusError(str(error)) from error
     plan["submitted_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    job_id = os.environ.get("NEBIUS_JOB_ID", "")
+    if re.fullmatch(r"[a-f0-9]{24}", job_id):
+        plan["operation_job_id"] = job_id
     _atomic_json(plan_path, plan)
     _atomic_json(_pending_path(plan_id), plan)
     if reusable:

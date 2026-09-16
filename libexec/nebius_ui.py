@@ -614,7 +614,9 @@ class App:
                 raise core.NebiusError("The operation worker could not start. No cloud request was confirmed.")
             self.progress(title, started, mutation=True)
             if self.key() in ("b", "B", "\x1b", 27):
-                self.notice = "Operation continues. Press A to follow progress."
+                self.notice = ("VM launch continues. Press G to launch another or A to follow progress."
+                               if job.get("command") == "create"
+                               else "Operation continues. Press A to follow progress.")
                 raise Background()
 
     def mutate(self, title, *arguments):
@@ -764,7 +766,7 @@ class App:
                              details=json.dumps(preflight, indent=2), error=True)
                 raise Back()
         project_id = self.choose_project(offering)
-        suggested = offering["platform"].removeprefix("gpu-").split("-")[0] + "-" + dt.datetime.now().strftime("%m%d-%H%M")
+        suggested = offering["platform"].removeprefix("gpu-").split("-")[0] + "-" + dt.datetime.now().strftime("%m%d-%H%M%S")
         name = suggested
         image = None
         disk_gib = core.DEFAULT_DISK_GIB
