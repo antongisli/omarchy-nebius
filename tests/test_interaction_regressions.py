@@ -111,12 +111,13 @@ class InteractionTests(unittest.TestCase):
     def test_escape_and_b_background_without_stopping_worker(self):
         for key in ("\x1b", "b", "B", 27):
             application, screen = app([key])
-            with patch.object(ui.core, "_read_json", return_value={"phase": "running"}), \
+            with patch.object(ui.core, "_read_json", return_value={"phase": "running", "command": "create"}), \
                  patch.object(ui.os, "kill") as kill:
                 with self.assertRaises(ui.Background):
                     application.watch("a" * 24, "Creating VM")
             kill.assert_not_called()
             self.assertIn("[Esc/B]", screen.frames[-1])
+            self.assertIn("Press G to launch another", application.notice)
 
     def test_delete_uses_one_review_and_explicit_d_without_arrow_navigation(self):
         application, screen = app(["d", "d"], 120, 44)

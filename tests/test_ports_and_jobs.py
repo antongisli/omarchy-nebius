@@ -27,7 +27,8 @@ class PortsAndJobsTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        for key, path in {"STATE_DIR": self.root, "REGISTRY_FILE": self.root / "vms.json",
+        for key, path in {"STATE_DIR": self.root, "PLAN_DIR": self.root / "plans",
+                          "REGISTRY_FILE": self.root / "vms.json",
                           "OPERATION_FILE": self.root / "operation.json"}.items():
             context = patch.object(core, key, path)
             context.start()
@@ -53,6 +54,39 @@ class PortsAndJobsTests(unittest.TestCase):
                 self.assertTrue(pool.submit(attempt, "computeinstance-b").result())
                 with self.assertRaisesRegex(core.NebiusError, "this resource"):
                     pool.submit(attempt, "computeinstance-a").result()
+
+    def test_vm_creates_lock_per_plan_but_shared_disks_stay_serialized(self):
+        first, second, third = "a" * 24, "b" * 24, "c" * 24
+        core._atomic_json(core.PLAN_DIR / f"{first}.json", {"plan_id": first})
+        core._atomic_json(core.PLAN_DIR / f"{second}.json", {"plan_id": second})
+        for plan_id in (first, third):
+            core._atomic_json(core.PLAN_DIR / f"{plan_id}.json", {
+                "plan_id": plan_id, "reusable_disk": {"disk_id": "computedisk-shared"},
+            })
+        first_resource = core.mutation_resource(["create", "--plan-id", first])
+        second_resource = core.mutation_resource(["create", "--plan-id", second])
+        third_resource = core.mutation_resource(["create", "--plan-id", third])
+        self.assertNotEqual(first_resource, second_resource)
+        self.assertEqual(first_resource, third_resource)
+        with core.mutation_guard(resource=first_resource):
+            with core.mutation_guard(resource=second_resource):
+                pass
+            def take_shared_disk():
+                with core.mutation_guard(resource=third_resource):
+                    return True
+            with ThreadPoolExecutor(max_workers=1) as pool, \
+                 self.assertRaisesRegex(core.NebiusError, "this resource"):
+                pool.submit(take_shared_disk).result()
+
+    def test_active_launch_is_not_mistaken_for_recovery(self):
+        job_id = "d" * 24
+        plan = {"plan_id": "p" * 24, "operation_job_id": job_id}
+        core._atomic_json(self.root / "jobs" / f"{job_id}.json", {"id": job_id, "phase": "running"})
+        with (self.root / ("job-" + job_id + ".lock")).open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertFalse(core._pending_launch_needs_recovery(plan))
+        self.assertTrue(core._pending_launch_needs_recovery(plan))
+        self.assertTrue(core._pending_launch_needs_recovery({"plan_id": "p" * 24}))
 
     def test_worker_lock_distinguishes_running_from_reused_pid(self):
         job_id = "a" * 24

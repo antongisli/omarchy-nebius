@@ -38,9 +38,7 @@ def run_job():
         except BlockingIOError:
             core._atomic_json(job_path, {"phase": "error", "error": "Another operation is running. Open activity."})
             return 1
-        resource = "global"
-        if arguments[0] in {"start", "stop", "delete"} and "--vm-id" in arguments:
-            resource = arguments[arguments.index("--vm-id") + 1]
+        resource = core.mutation_resource(arguments)
         try:
             ownership.enter_context(core.mutation_guard(resource=resource))
         except core.NebiusError as error:

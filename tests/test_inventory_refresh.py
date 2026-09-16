@@ -57,6 +57,15 @@ class InventoryRefreshTests(unittest.TestCase):
         job = {**JOB, 'command': 'start', 'operation': {'stage': 'ssh'}}
         self.assertEqual(inventory.apply_jobs(SNAPSHOT, [job])['vms'][0]['state'], 'waiting for ssh')
 
+    def test_active_create_is_not_shown_as_an_unconfirmed_launch(self):
+        plan_id = 'p' * 24
+        snapshot = {**SNAPSHOT, 'recovery': [{'plan_id': plan_id}, {'plan_id': 'other'}]}
+        creating = {'id': 'c' * 24, 'command': 'create', 'phase': 'running',
+                    'arguments': ['create', '--plan-id', plan_id]}
+        self.assertEqual(inventory.apply_jobs(snapshot, [creating])['recovery'], [{'plan_id': 'other'}])
+        self.assertEqual(inventory.apply_jobs(snapshot, [{**creating, 'phase': 'interrupted'}])['recovery'],
+                         snapshot['recovery'])
+
     def test_polling_is_nonblocking_and_never_starts_overlapping_reads(self):
         process = Mock(returncode=None, poll=Mock(return_value=None))
         with patch.object(inventory.subprocess, 'Popen', return_value=process) as launch, \

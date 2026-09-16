@@ -51,7 +51,14 @@ def apply_jobs(snapshot, entries):
                 if not (latest.get(row['disk_id'], {}).get('phase') == 'ready'
                         and latest[row['disk_id']].get('command') == 'delete-disk'
                         and (latest[row['disk_id']].get('result') or {}).get('deleted'))]
-    return {**snapshot, 'vms': vms, 'reusable_disks': reusable}
+    active_create_plans = {
+        arguments[arguments.index('--plan-id') + 1]
+        for job in entries if job.get('command') == 'create' and job.get('phase') in {'queued', 'running'}
+        for arguments in [job.get('arguments') or []]
+        if '--plan-id' in arguments and arguments.index('--plan-id') + 1 < len(arguments)
+    }
+    recovery = [row for row in snapshot.get('recovery', []) if row.get('plan_id') not in active_create_plans]
+    return {**snapshot, 'vms': vms, 'reusable_disks': reusable, 'recovery': recovery}
 
 
 class Poller:
