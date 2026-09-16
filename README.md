@@ -11,6 +11,7 @@
 
 <p align="center">
   <a href="#install"><img src="https://img.shields.io/badge/Omarchy-Quattro-052B42?style=flat-square" alt="Omarchy Quattro"></a>
+  <img src="https://img.shields.io/badge/Nebius-community%20plugin-E0FF4F?style=flat-square&labelColor=052B42" alt="Unofficial community plugin for Nebius">
   <a href="#use-your-agent"><img src="https://img.shields.io/badge/agents-Codex%20%2B%20Claude%20Code-E0FF4F?style=flat-square&labelColor=052B42" alt="Codex and Claude Code"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/code-MIT-052B42?style=flat-square" alt="MIT licensed code"></a>
   <a href="https://github.com/antongisli/omarchy-nebius/actions/workflows/check.yml"><img src="https://github.com/antongisli/omarchy-nebius/actions/workflows/check.yml/badge.svg" alt="Checks"></a>
@@ -143,4 +144,4 @@ Found a rough edge? [Open an issue](https://github.com/antongisli/omarchy-nebius
 
 [Release notes](CHANGELOG.md) · [Full reference](docs/reference.md) · [Contributing](docs/development.md)
 
-Maintained by [Anton Smith](https://github.com/antongisli). Official Nebius CLI + MCP. [MIT code](LICENSE) · [Brand credits](assets/NOTICE.md)
+Maintained by [Anton Smith](https://github.com/antongisli). Unofficial community plugin; not a supported Nebius product. Uses the official Nebius CLI and MCP. [MIT code](LICENSE) · [Brand credits](assets/NOTICE.md)

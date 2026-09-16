@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Make the plugin's unofficial, community-maintained status explicit in its
+  marketplace description, README and brand notice.
 - Independent VM launches can now run concurrently. Locks remain scoped around
   each launch and shared resource, and only abandoned or uncertain requests—not
   actively tracked creates—trigger recovery protection.
