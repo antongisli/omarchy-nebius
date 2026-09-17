@@ -21,6 +21,11 @@
 
 *Screenshots use the real interface with example data. Availability depends on your account.*
 
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=x2Mt4pdzEPg"><strong>▶ Watch it in action</strong></a><br>
+  Omarchy + Nebius + ComfyUI · Watch on YouTube
+</p>
+
 Out of VRAM in **ComfyUI**? Trying a bigger model with **vLLM** or **Open WebUI**? Get a cloud GPU without leaving your Omarchy workflow.
 
 ## ✨ What you get
