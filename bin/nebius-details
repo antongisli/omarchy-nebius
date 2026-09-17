@@ -10,7 +10,8 @@ printf '\n  Nebius setup details\n\n'
 "$PLUGIN_ROOT/bin/nebius-status" --probe
 
 printf '\n  Pinned components\n\n'
-printf 'Nebius CLI      0.12.269\n'
+printf 'Nebius CLI      0.12.277\n'
+printf 'API client      %s\n' "$(python3 "$(dirname -- "${BASH_SOURCE[0]}")/../libexec/nebius_runtime.py" user-agent)"
 printf 'Nebius MCP      6388bf779acdd331d9b2016230b37f8bf7177e12\n'
 printf 'CLI location    %s\n' "$(python3 "$(dirname -- "${BASH_SOURCE[0]}")/../libexec/nebius_runtime.py")"
 printf 'MCP cache       %s\n' "${XDG_CACHE_HOME:-$HOME/.cache}/nebius/uv"

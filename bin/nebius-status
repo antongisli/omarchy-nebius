@@ -2,7 +2,7 @@
 
 set -u -o pipefail
 
-readonly EXPECTED_CLI_VERSION="0.12.269"
+readonly EXPECTED_CLI_VERSION="0.12.277"
 readonly MCP_COMMIT="6388bf779acdd331d9b2016230b37f8bf7177e12"
 readonly STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/nebius"
 readonly SETUP_STATE="$STATE_DIR/setup.json"

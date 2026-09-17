@@ -1,6 +1,15 @@
 # Release notes
 
-## Unreleased
+## 0.8.4 · 2026-09-17 · API client identification
+
+- Identify plugin-originated API calls as `omarchy-nebius/<version>` using the
+  Nebius CLI's User-Agent prefix. Regular terminal CLI calls are unchanged.
+  Setup now pins checksum-verified CLI `0.12.277`; existing installs must run
+  **Set up / reconnect** to upgrade before request attribution takes effect.
+- Clarify the difference between an exact marketplace verification snapshot
+  and Omarchy's current-upstream installation and update commands.
+
+## 0.8.3
 
 - Make the plugin's unofficial, community-maintained status explicit in its
   marketplace description, README and brand notice.

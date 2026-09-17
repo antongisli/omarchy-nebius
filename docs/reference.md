@@ -7,7 +7,7 @@ The plugin uses a dedicated profile and does not modify unrelated integrations.
 ## What setup does
 
 - Installs Arch's official `uv` package through `omarchy-pkg-add uv` in a visible terminal.
-- Reuses an existing matching Nebius CLI without taking ownership. Otherwise installs the checksum-verified `0.12.269` binary privately at `${XDG_DATA_HOME:-~/.local/share}/nebius/cli/0.12.269/nebius`. Existing `~/.nebius/bin/nebius` binaries are never overwritten, including newer or older versions. Unexpected files at the private destination stop setup with a repair message. An exact-path installation receipt distinguishes owned and borrowed CLIs. When the terminal command is free, setup adds a plugin-owned `~/.local/bin/nebius` link so `nebius` works in regular Omarchy terminals. Existing commands and paths are preserved.
+- Reuses an existing matching Nebius CLI without taking ownership. Otherwise installs the checksum-verified `0.12.277` binary privately at `${XDG_DATA_HOME:-~/.local/share}/nebius/cli/0.12.277/nebius`. Existing `~/.nebius/bin/nebius` binaries are never overwritten, including newer or older versions. Unexpected files at the private destination stop setup with a repair message. An exact-path installation receipt distinguishes owned and borrowed CLIs, including previous plugin-owned versions retained during upgrades. When the terminal command is free, setup adds a plugin-owned `~/.local/bin/nebius` link so `nebius` works in regular Omarchy terminals. Existing commands and paths are preserved.
 - Creates the dedicated `omarchy-nebius-mcp` profile through the official `nebius profile create` browser flow.
 - Rejects service-account profiles and uses only its dedicated browser-auth profile.
 - Uses the selected tenant without locking the plugin to one project. Projects created by the signed-in user are preferred; shared tenant projects are hidden from normal placement.
@@ -20,6 +20,52 @@ The plugin uses a dedicated profile and does not modify unrelated integrations.
 The installer is re-runnable and does not edit shell profiles. It uses each agent's own CLI to add only the `nebius` MCP registration to `~/.codex/config.toml` and/or `~/.claude.json`, and refuses to overwrite a server with the same name but a different command. Agent installation is not required for the keyboard manager; it is required only for natural-language actions. Setup reports when neither supported agent is installed and reports sign-in separately for every agent it finds.
 
 Omarchy supplies the ordinary terminal tools used by setup: Python, Bash, jq, curl, OpenSSH, fzf, gum and util-linux. Package installation runs visibly and may ask for your password; the plugin does not silently escalate privileges.
+
+## Marketplace snapshots and installation
+
+Marketplace verification applies to one exact 40-character Git commit SHA.
+Omarchy's current `plugin add` and `plugin update` commands follow the repository's
+mutable HEAD; neither accepts a marketplace SHA. A verified listing therefore
+does not guarantee that these commands install the reviewed snapshot.
+
+To check your installed commit:
+
+```bash
+git -C ~/.config/omarchy/plugins/nebius rev-parse HEAD
+```
+
+Compare the full output with the **Verified snapshot** link on the
+[marketplace listing](https://plugins.omarchy.org/plugin.html?id=nebius).
+A pending update request is not approval. If you require the reviewed snapshot,
+do not enable a different commit. A release tag alone does not change Omarchy's
+installation behavior.
+
+Release submissions use the exact current commit, and `main` is kept unchanged
+while that commit is under review. Further development belongs on another branch.
+See the marketplace's [installation boundary](https://github.com/omacom/omarchy-plugin-marketplace/blob/main/VERIFICATION.md#installation-boundary).
+
+## API client identification
+
+Plugin-originated Nebius API calls include `omarchy-nebius/<plugin-version>`
+at the start of the CLI's normal User-Agent. This applies to the keyboard UI,
+background jobs, plugin tools used by Codex or Claude Code, setup, and the
+private upstream MCP bridge. It uses `NEBIUS_CLI_USER_AGENT_PREFIX` in child
+processes only; no shell profile or global CLI configuration is changed.
+Regular `nebius` commands in your terminal do not acquire the plugin prefix.
+
+The added identifier contains only the public plugin name and version, not a
+unique installation ID, username, hostname, or account ID. The CLI's standard
+User-Agent fields remain intact. This adds no analytics collector or separate
+telemetry requests. Nebius can distinguish plugin requests if its API logs
+retain the User-Agent; this plugin does not provide a usage analytics dashboard.
+
+After updating an existing installation, choose **Set up / reconnect** once to
+install CLI `0.12.277`, then reopen plugin terminals and agent sessions. The
+previously pinned CLI ignores the prefix; an older installation remains usable
+until setup upgrades it, but request attribution is not active there.
+Setup preserves older binaries and their ownership records. Choosing to remove
+the CLI during uninstall also removes recorded previous versions, only at known
+installation paths and only when their checksums still match.
 
 ## Image selection
 

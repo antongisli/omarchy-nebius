@@ -2,9 +2,9 @@
 
 set -Eeuo pipefail
 
-readonly CLI_VERSION="0.12.269"
-readonly CLI_SHA256_X86_64="fd8c967cdfbd6c28f69979c87c1c8f9c52244219ed4981c48f9b40be314bed98"
-readonly CLI_SHA256_ARM64="91edf41c2ac03a551b84347c1fff739d55f32d968df184bc9b08e4780de71bb9"
+readonly CLI_VERSION="0.12.277"
+readonly CLI_SHA256_X86_64="4862cc3bb8736be3be5e7197ed76b00c2d4b161fcb6d1a8c6df731e9fadfc6f5"
+readonly CLI_SHA256_ARM64="8efa3c9ecd5ccccb283ce110121649ec19a3153985327657abb7e38a692cf5e7"
 readonly CLI_BASE_URL="https://storage.eu-north1.nebius.cloud/cli/release/$CLI_VERSION/linux"
 readonly MCP_COMMIT="6388bf779acdd331d9b2016230b37f8bf7177e12"
 readonly STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/nebius"
@@ -17,6 +17,8 @@ readonly LOG_FILE="$STATE_DIR/setup.log"
 readonly INSTALL_RECEIPT="$STATE_DIR/install-receipt.json"
 readonly PLUGIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly RUNTIME="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../libexec" && pwd)/nebius_runtime.py"
+NEBIUS_CLI_USER_AGENT_PREFIX=$(python3 "$RUNTIME" user-agent)
+export NEBIUS_CLI_USER_AGENT_PREFIX
 CLI=$(python3 "$RUNTIME")
 readonly PRIVATE_CLI="$(python3 "$RUNTIME" private-cli)"
 readonly CLI_COMMAND="$HOME/.local/bin/nebius"
@@ -237,7 +239,12 @@ else
   fi
   rm -f -- "$cli_candidate"
   temp_receipt=$(mktemp "$STATE_DIR/.receipt.XXXXXX")
-  jq --arg path "$CLI" '.cli_path = $path | .owned.cli = true' "$INSTALL_RECEIPT" >"$temp_receipt"
+  # Preserve ownership evidence for older binaries so removal covers upgrades.
+  jq --arg path "$CLI" '
+    if .owned.cli == true and (.cli_path | type) == "string" and .cli_path != $path then
+      .cli_previous_paths = (((.cli_previous_paths // []) + [.cli_path]) | unique)
+    else . end | .cli_path = $path | .owned.cli = true
+  ' "$INSTALL_RECEIPT" >"$temp_receipt"
   mv "$temp_receipt" "$INSTALL_RECEIPT"
   say "✓ Installed and verified Nebius CLI $CLI_VERSION"
 fi

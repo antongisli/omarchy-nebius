@@ -15,7 +15,7 @@ import threading
 import time
 from typing import Any
 
-from nebius_runtime import VERSION, cli_path
+from nebius_runtime import CLIENT_NAME, VERSION, cli_environment, cli_path
 
 
 MCP_COMMIT = "6388bf779acdd331d9b2016230b37f8bf7177e12"
@@ -50,7 +50,7 @@ class McpClient:
             command.extend(["--refresh-package", "nebius-mcp-server"])
         command.append(MCP_SPEC)
 
-        environment = os.environ.copy()
+        environment = cli_environment()
         environment.update(
             {
                 "SAFE_MODE": "false",
@@ -148,7 +148,7 @@ class McpClient:
             {
                 "protocolVersion": "2025-06-18",
                 "capabilities": {},
-                "clientInfo": {"name": "nebius-omarchy-plugin", "version": VERSION},
+                "clientInfo": {"name": CLIENT_NAME, "version": VERSION},
             },
             timeout=180,
         )

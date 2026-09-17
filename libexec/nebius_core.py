@@ -24,7 +24,7 @@ import time
 import threading
 from typing import Any
 
-from nebius_runtime import cli_path
+from nebius_runtime import cli_environment, cli_path
 
 
 PROFILE = "omarchy-nebius-mcp"
@@ -236,6 +236,7 @@ def _run(command: list[str], *, timeout: int = 90, input_text: str | None = None
         result = subprocess.run(
             command,
             input=input_text,
+            env=cli_environment() if command[0] == str(CLI) else None,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

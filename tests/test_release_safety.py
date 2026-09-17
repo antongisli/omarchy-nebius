@@ -81,6 +81,55 @@ curl() {
         self.assertEqual(receipt["cli_link_path"], str(self.command))
         self.assertEqual(receipt["cli_link_target"], str(self.launcher))
 
+    def test_upgrade_retains_previous_ownership_for_uninstall(self):
+        self.legacy.write_text("#!/bin/sh\necho previous-version\n")
+        self.legacy.chmod(0o700)
+        self.receipt.write_text(json.dumps({"owned": {"cli": True}, "cli_path": str(self.legacy)}))
+        result = self.install_stage()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads(self.receipt.read_text())
+        self.assertEqual(receipt["cli_path"], str(self.private))
+        self.assertEqual(receipt["cli_previous_paths"], [str(self.legacy)])
+        self.assertTrue(self.legacy.exists())
+        self.assertEqual(self.install_stage(current=self.private).returncode, 0)
+        self.assertEqual(json.loads(self.receipt.read_text())["cli_previous_paths"], [str(self.legacy)])
+
+    def test_upgrade_does_not_claim_preexisting_cli(self):
+        self.legacy.write_text("#!/bin/sh\necho previous-version\n")
+        self.legacy.chmod(0o700)
+        self.receipt.write_text(json.dumps({"owned": {"cli": False}, "cli_path": str(self.legacy)}))
+        result = self.install_stage()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("cli_previous_paths", json.loads(self.receipt.read_text()))
+
+    def test_uninstall_previous_versions_requires_known_path_and_checksum(self):
+        source = (ROOT / "bin/nebius-uninstall").read_text()
+        collect = 'previous_owned_clis=()' + source.split('previous_owned_clis=()', 1)[1].split('\nowned_cli_link=', 1)[0]
+        remove = 'if [[ $cli_policy == "remove"' + source.split('if [[ $cli_policy == "remove"', 1)[1].split('\nstage="removing the Omarchy plugin"', 1)[0]
+        previous = self.root / "old-private/nebius"
+        previous.parent.mkdir()
+        unknown = self.root / "unrelated-nebius"
+        unknown.write_bytes(self.binary.read_bytes())
+        self.receipt.write_text(json.dumps({"cli_previous_paths": [str(previous), str(unknown)]}))
+        for case in ("verified", "modified", "symlink", "keep"):
+            with self.subTest(case=case):
+                previous.parent.mkdir(exist_ok=True)
+                if previous.exists() or previous.is_symlink():
+                    previous.unlink()
+                if case == "symlink":
+                    previous.symlink_to(unknown)
+                else:
+                    previous.write_bytes(b"changed" if case == "modified" else self.binary.read_bytes())
+                result = subprocess.run(["bash", "-euc", collect + '\n' + remove], env={**os.environ,
+                    "HOME": str(self.root), "RECEIPT": str(self.receipt),
+                    "PREVIOUS_PRIVATE_CLI": str(previous), "owned_cli": str(self.private),
+                    "cli_policy": "keep" if case == "keep" else "remove", "cli_owned": "true",
+                    "CLI_SHA256": self.digest, "CLI_SHA256_ARM64": self.digest},
+                    capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(previous.exists(), case != "verified")
+                self.assertTrue(unknown.exists())
+
     def test_matching_user_cli_is_reused_without_claiming_ownership(self):
         self.legacy.write_bytes(self.binary.read_bytes())
         self.legacy.chmod(0o700)

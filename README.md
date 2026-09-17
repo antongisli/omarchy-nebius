@@ -79,6 +79,8 @@ Setup installs **uv**, a checksum-verified **Nebius CLI**, pinned **official Neb
 
 [GPU pricing →](https://nebius.com/prices)
 
+Plugin API requests identify themselves as `omarchy-nebius/<version>`—no unique installation ID or separate analytics requests. [Client identification →](docs/reference.md#api-client-identification)
+
 ## ⌨️ Hit a key
 
 From the Nebius panel:
@@ -135,6 +137,10 @@ Billable and destructive actions require approval. **Agents are optional**—the
 ## 🧹 Update & uninstall
 
 **Update:** `omarchy plugin update nebius`, then reopen Nebius terminals and agent sessions.
+
+After updating to **0.8.4**, choose **S · Set up / reconnect** once to upgrade the CLI.
+Omarchy installs the repository's current HEAD, not a pinned marketplace snapshot.
+[Check the installed commit →](docs/reference.md#marketplace-snapshots-and-installation)
 
 **Uninstall:** choose **U · Uninstall Nebius plugin**, ask your Nebius-connected agent, or run:
 

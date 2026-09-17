@@ -15,11 +15,14 @@ readonly CLEANUP_HELPER="$(dirname -- "$RUNTIME")/nebius_uninstall.py"
 readonly SHORTCUTS_HELPER="$(dirname -- "$RUNTIME")/nebius_shortcuts.py"
 readonly CLI="$(python3 "$RUNTIME")"
 readonly PRIVATE_CLI="$(python3 "$RUNTIME" private-cli)"
+readonly PREVIOUS_PRIVATE_CLI="$(python3 "$RUNTIME" previous-cli)"
 readonly CLI_COMMAND="$HOME/.local/bin/nebius"
 readonly CLI_LAUNCHER="$PLUGIN_DIR/bin/nebius-cli"
 readonly CLI_CREDENTIALS="$HOME/.nebius/credentials.yaml"
-readonly CLI_SHA256="fd8c967cdfbd6c28f69979c87c1c8f9c52244219ed4981c48f9b40be314bed98"
-readonly CLI_SHA256_ARM64="91edf41c2ac03a551b84347c1fff739d55f32d968df184bc9b08e4780de71bb9"
+readonly CLI_SHA256="4862cc3bb8736be3be5e7197ed76b00c2d4b161fcb6d1a8c6df731e9fadfc6f5"
+readonly CLI_SHA256_ARM64="8efa3c9ecd5ccccb283ce110121649ec19a3153985327657abb7e38a692cf5e7"
+readonly CLI_PREVIOUS_SHA256="fd8c967cdfbd6c28f69979c87c1c8f9c52244219ed4981c48f9b40be314bed98"
+readonly CLI_PREVIOUS_SHA256_ARM64="91edf41c2ac03a551b84347c1fff739d55f32d968df184bc9b08e4780de71bb9"
 readonly SSH_KEY="$HOME/.ssh/nebius-ed25519"
 readonly BINDINGS="$HOME/.config/hypr/bindings.lua"
 readonly START_MARKER="-- >>> independent Nebius plugin shortcuts >>>"
@@ -88,10 +91,16 @@ legacy_installed "✓ Installed MCP runtime (" && uv_owned=true
 legacy_installed "✓ Installed and verified Nebius CLI 0.12.269" && cli_owned=true
 owned_cli=$(jq -r '.cli_path // empty' "$RECEIPT" 2>/dev/null || true)
 [[ -n $owned_cli ]] || owned_cli="$HOME/.nebius/bin/nebius"
-if [[ $owned_cli != "$PRIVATE_CLI" && $owned_cli != "$HOME/.nebius/bin/nebius" ]]; then
+if [[ $owned_cli != "$PRIVATE_CLI" && $owned_cli != "$PREVIOUS_PRIVATE_CLI" && $owned_cli != "$HOME/.nebius/bin/nebius" ]]; then
   cli_owned=false  # A receipt must never authorize deletion at an arbitrary path.
 fi
 [[ ! -L $owned_cli ]] || cli_owned=false
+previous_owned_clis=()
+while IFS= read -r previous_cli; do
+  if [[ ( $previous_cli == "$PREVIOUS_PRIVATE_CLI" || $previous_cli == "$HOME/.nebius/bin/nebius" ) && ! -L $previous_cli ]]; then
+    previous_owned_clis+=("$previous_cli")
+  fi
+done < <(jq -r '.cli_previous_paths // [] | .[] | select(type == "string")' "$RECEIPT" 2>/dev/null || true)
 owned_cli_link=$(jq -r '.cli_link_path // empty' "$RECEIPT" 2>/dev/null || true)
 owned_cli_link_target=$(jq -r '.cli_link_target // empty' "$RECEIPT" 2>/dev/null || true)
 if [[ $owned_cli_link != "$CLI_COMMAND" || $owned_cli_link_target != "$CLI_LAUNCHER" ]]; then
@@ -349,14 +358,18 @@ if [[ $cli_link_owned == true ]]; then
   fi
 fi
 
-if [[ $cli_policy == "remove" && $cli_owned == true && -x $owned_cli ]]; then
-  installed_sha=$(sha256sum "$owned_cli" | cut -d' ' -f1)
-  if [[ $installed_sha == "$CLI_SHA256" || $installed_sha == "$CLI_SHA256_ARM64" ]]; then
-    rm -f -- "$owned_cli"
-    rmdir "$(dirname -- "$owned_cli")" 2>/dev/null || true
-  else
-    printf '  Kept Nebius CLI because it no longer matches the plugin-installed binary.\n'
-  fi
+if [[ $cli_policy == "remove" && $cli_owned == true ]]; then
+  for cli_to_remove in "$owned_cli" "${previous_owned_clis[@]-}"; do
+    [[ -n $cli_to_remove && -f $cli_to_remove && ! -L $cli_to_remove ]] || continue
+    installed_sha=$(sha256sum "$cli_to_remove" | cut -d' ' -f1)
+    if [[ $installed_sha == "$CLI_SHA256" || $installed_sha == "$CLI_SHA256_ARM64" ||
+          $installed_sha == "${CLI_PREVIOUS_SHA256:-}" || $installed_sha == "${CLI_PREVIOUS_SHA256_ARM64:-}" ]]; then
+      rm -f -- "$cli_to_remove"
+      rmdir "$(dirname -- "$cli_to_remove")" 2>/dev/null || true
+    else
+      printf '  Kept Nebius CLI because it no longer matches the plugin-installed binary.\n'
+    fi
+  done
 fi
 
 stage="removing the Omarchy plugin"
