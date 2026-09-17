@@ -22,8 +22,11 @@
 *Screenshots use the real interface with example data. Availability depends on your account.*
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=x2Mt4pdzEPg"><strong>▶ Watch it in action</strong></a><br>
-  Omarchy + Nebius + ComfyUI · Watch on YouTube
+  <a href="https://www.youtube.com/watch?v=x2Mt4pdzEPg">
+    <img src="https://i.ytimg.com/vi/x2Mt4pdzEPg/maxresdefault.jpg" alt="Watch the video: Omarchy + Nebius + ComfyUI, featuring a rally car and Nebius branding" width="800">
+  </a><br>
+  <a href="https://www.youtube.com/watch?v=x2Mt4pdzEPg"><strong>▶ Watch it in action on YouTube</strong></a><br>
+  Omarchy + Nebius + ComfyUI
 </p>
 
 Out of VRAM in **ComfyUI**? Trying a bigger model with **vLLM** or **Open WebUI**? Get a cloud GPU without leaving your Omarchy workflow.
