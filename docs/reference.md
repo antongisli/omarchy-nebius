@@ -21,6 +21,25 @@ The installer is re-runnable and does not edit shell profiles. It uses each agen
 
 Omarchy supplies the ordinary terminal tools used by setup: Python, Bash, jq, curl, OpenSSH, fzf, gum and util-linux. Package installation runs visibly and may ask for your password; the plugin does not silently escalate privileges.
 
+## VM nicknames
+
+In **Your VMs**, highlight a running or stopped VM and press **N**, or choose
+**Nickname** from its actions. Enter saves; Esc cancels. Clear with Ctrl+U and
+save to remove a nickname. Nicknames can contain up to 64 printable characters.
+
+The nickname is stored in Nebius at `metadata.labels["omarchy-nickname"]`, so
+it is readable through the Compute API and CLI and follows the VM across plugin
+installations. The VM list shows the nickname with the original name underneath;
+search matches both. This does not rename the VM or alter its hostname, SSH
+identity, port forwards, configuration, or other labels.
+
+Saving requires permission to update the VM in one of your personal projects.
+Service-managed nodes and VMs with pending operations or recovery are not editable.
+Saves run as tracked background jobs; Esc/B leaves progress running in Activity.
+A successful save is verified with a fresh read. If its outcome is uncertain,
+refresh Your VMs before retrying. Newer cloud reads take precedence over saved job
+results, including nickname changes made outside the plugin.
+
 ## Marketplace snapshots and installation
 
 Marketplace verification applies to one exact 40-character Git commit SHA.

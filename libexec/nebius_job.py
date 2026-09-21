@@ -26,7 +26,7 @@ def main():
 def run_job():
     job_id, *arguments = sys.argv[1:]
     if not re.fullmatch(r"[a-f0-9]{24}", job_id) or not arguments or arguments[0] not in {
-        "create", "create-project", "start", "stop", "delete", "delete-disk", "recover", "archive-request", "repair-rejected"
+        "create", "create-project", "start", "stop", "delete", "delete-disk", "recover", "archive-request", "repair-rejected", "set-nickname"
     }:
         return 2
     job_path = core.STATE_DIR / "jobs" / f"{job_id}.json"

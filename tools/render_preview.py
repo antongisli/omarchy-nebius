@@ -122,21 +122,23 @@ def render(width=80, height=30, allocation="on_demand", surface="capacity"):
                      "error": "Connection timed out. Check the VM state before retrying."},
                 ]):
                     app.activity()
-            elif surface in {"overview", "overview-deleting", "vm-actions", "delete-review", "home"}:
+            elif surface in {"overview", "overview-deleting", "overview-nickname", "vm-actions", "vm-actions-nickname", "nickname", "delete-review", "home"}:
                 vm = {"id": "computeinstance-example", "name": "comfyui", "state": "running", "region": "eu-north1",
                       "allocation": "on_demand", "project_name": "personal", "platform": "gpu-h100-sxm",
                       "managed": True, "can_delete": True, "ssh_user": "dev", "disk_id": "computedisk-example"}
-                app.inventory = {"vms": [vm, {**vm, "id": "computeinstance-second", "name": "inference", "state": "stopped"}], "source": "live"}
+                if surface in {"overview-nickname", "vm-actions-nickname", "nickname"}:
+                    vm.update(name="nebius-h100-1234", nickname="ComfyUI studio")
+                app.inventory = {"vms": [vm, {**vm, "id": "computeinstance-second", "name": "inference", "nickname": "", "state": "stopped"}], "source": "live"}
                 with patch.object(ui.jobs, "jobs", return_value=[{"id": "a" * 24, "command": "delete", "phase": "running",
                         "arguments": ["delete", "--vm-id", vm["id"]]}] if surface == "overview-deleting" else []), \
                      patch.object(ui.core, "_read_json", return_value={}):
-                    if surface in {"overview", "overview-deleting"}:
+                    if surface in {"overview", "overview-deleting", "overview-nickname"}:
                         app.overview()
                     elif surface == "home":
                         app.entry = "home"
                         app.run()
                     else:
-                        app.vm_actions(vm, action="delete" if surface == "delete-review" else None)
+                        app.vm_actions(vm, action={"delete-review": "delete", "nickname": "nickname"}.get(surface))
             else:
                 app.capacity_flow(launch=True)
         except FrameReady:
@@ -197,7 +199,7 @@ if __name__ == "__main__":
     parser.add_argument("--width", type=int, default=80)
     parser.add_argument("--height", type=int, default=30)
     parser.add_argument("--allocation", choices=("on_demand", "preemptible"), default="on_demand")
-    parser.add_argument("--surface", choices=("cover", "capacity", "ports", "port-form", "launch-ready", "launch-progress", "activity", "overview", "overview-deleting", "vm-actions", "delete-review", "home", "shortcuts", "shortcuts-unset", "shortcut-form", "shortcut-error"), default="capacity")
+    parser.add_argument("--surface", choices=("cover", "capacity", "ports", "port-form", "launch-ready", "launch-progress", "activity", "overview", "overview-deleting", "overview-nickname", "vm-actions", "vm-actions-nickname", "nickname", "delete-review", "home", "shortcuts", "shortcuts-unset", "shortcut-form", "shortcut-error"), default="capacity")
     parser.add_argument("--output", type=Path, default=ROOT / "assets/terminal-preview.svg")
     args = parser.parse_args()
     target = args.output

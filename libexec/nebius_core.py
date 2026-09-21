@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import datetime as dt
 import hashlib
 import ipaddress
+import io
 import fcntl
 import functools
 import json
@@ -29,6 +31,7 @@ from nebius_runtime import cli_environment, cli_path
 
 PROFILE = "omarchy-nebius-mcp"
 MANAGED_BY = "omarchy-nebius"
+NICKNAME_LABEL = "omarchy-nickname"
 HOME = Path.home()
 CLI = cli_path()
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", HOME / ".local/state")) / "nebius"
@@ -40,7 +43,7 @@ PROJECTS_FILE = STATE_DIR / "projects.json"
 INVENTORY_FILE = STATE_DIR / "inventory.json"
 CONNECTIONS_FILE = STATE_DIR / "connections.json"
 PREFERENCES_FILE = STATE_DIR / "preferences.json"
-INVENTORY_SCHEMA = "nebius.inventory/v2"
+INVENTORY_SCHEMA = "nebius.inventory/v3"
 CREDENTIALS_FILE = HOME / ".nebius/credentials.yaml"
 SSH_KEY = HOME / ".ssh/nebius-ed25519"
 SSH_USER = "dev"
@@ -120,7 +123,7 @@ def mutation_resource(arguments: list[str]) -> str:
     if not arguments:
         return "global"
     command = arguments[0]
-    if command in {"start", "stop", "delete"} and "--vm-id" in arguments:
+    if command in {"start", "stop", "delete", "set-nickname"} and "--vm-id" in arguments:
         try:
             return arguments[arguments.index("--vm-id") + 1]
         except IndexError:
@@ -144,7 +147,7 @@ def cloud_mutation(function):
     @functools.wraps(function)
     def locked(*args, **kwargs):
         key = "global"
-        if function.__name__ in {"start_vm", "stop_vm", "delete_vm"}:
+        if function.__name__ in {"start_vm", "stop_vm", "delete_vm", "set_vm_nickname"}:
             key = str(args[0] if args else kwargs["vm_id"])
         elif function.__name__ == "create_gpu_vm":
             plan_id = str(args[0] if args else kwargs["plan_id"])
@@ -1910,6 +1913,7 @@ def _vm_summary(item: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]
         username = match.group(1) if match else ""
     return {
         **registered, "id": vm_id, "name": str(metadata.get("name") or vm_id),
+        "nickname": str((metadata.get("labels") or {}).get(NICKNAME_LABEL) or ""),
         "project_id": project["project_id"], "project_name": project["project_name"],
         "region": project["region"], "state": str(status.get("state") or "unknown").lower(),
         "platform": resources.get("platform") or "CPU", "preset": resources.get("preset") or "",
@@ -2115,6 +2119,49 @@ def _compute_mutation(kind, action, resource_id):
             return
         time.sleep(3)
     raise NebiusError("Cloud operation is still pending. Resume it in Activity; its operation ID is saved.")
+
+
+def validate_nickname(value: str) -> str:
+    if not isinstance(value, str) or any(not char.isprintable() for char in value):
+        raise NebiusError("Use a single line without control characters")
+    value = value.strip()
+    if len(value) > 64:
+        raise NebiusError("Use 64 characters or fewer")
+    return value
+
+
+@cloud_mutation
+def set_vm_nickname(vm_id: str, nickname: str) -> dict[str, Any]:
+    nickname = validate_nickname(nickname)
+    instance, vm = _accessible_vm(vm_id)
+    _require_direct_lifecycle(vm)
+    if vm["state"] not in {"running", "stopped"} or vm.get("recovery_id") or _cloud_operation_path(vm_id).exists():
+        raise NebiusError("Finish this VM's current operation or recovery before editing its nickname")
+    if vm.get("nickname", "") != nickname:
+        version = str(instance.get("metadata", {}).get("resource_version") or "")
+        if not version.isdecimal() or int(version) <= 0:
+            raise NebiusError("Could not read the VM resource version. Refresh and try again; nothing was changed")
+        if nickname:
+            # The CLI map flag uses CSV. Quote the whole key=value field so commas,
+            # quotes and equals in a nickname cannot add or overwrite other labels.
+            encoded = io.StringIO()
+            csv.writer(encoded, lineterminator="").writerow([NICKNAME_LABEL + "=" + nickname])
+            flags = ["--labels-add", encoded.getvalue()]
+        else:
+            flags = ["--labels-remove", NICKNAME_LABEL]
+        _write_operation("running", "nickname", "Saving nickname in Nebius", vm_id=vm_id, name=vm["name"])
+        try:
+            run_cli(["compute", "instance", "update", vm_id, "--resource-version", version,
+                     *flags, "--format", "json"], timeout=90, parse_json=False)
+            current = run_cli(["compute", "instance", "get", vm_id, "--format", "json"], timeout=30)
+        except NebiusError as error:
+            raise NebiusError("Nickname save could not be confirmed. Refresh Your VMs to check before retrying.\n" + str(error)) from error
+        saved = (current.get("metadata", {}).get("labels") or {}).get(NICKNAME_LABEL) or ""
+        if saved != nickname:
+            raise NebiusError("Nickname save could not be confirmed. Refresh Your VMs before retrying")
+    message = "Nickname saved" if nickname else "Nickname removed"
+    _write_operation("ready", "nickname", message, vm_id=vm_id, name=vm["name"])
+    return {"id": vm_id, "name": vm["name"], "nickname": nickname}
 
 
 @cloud_mutation
@@ -2398,6 +2445,9 @@ def parse_args() -> argparse.Namespace:
         item.add_argument("--vm-id", required=True)
         if command == "stop":
             item.add_argument("--automatic", action="store_true", help=argparse.SUPPRESS)
+    nickname = sub.add_parser("set-nickname")
+    nickname.add_argument("--vm-id", required=True)
+    nickname.add_argument("--nickname", required=True)
     connect = sub.add_parser("connect")
     connect.add_argument("--vm-id", required=True)
     connect.add_argument("--no-launch", action="store_true")
@@ -2453,6 +2503,8 @@ def main() -> int:
             value = repair_rejected_launches()
         elif args.command == "archive-request":
             value = archive_request(args.request_id, args.confirmed)
+        elif args.command == "set-nickname":
+            value = set_vm_nickname(args.vm_id, args.nickname)
         elif args.command == "start":
             value = start_vm(args.vm_id)
         elif args.command == "stop":

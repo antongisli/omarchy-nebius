@@ -1,5 +1,11 @@
 # Release notes
 
+## Unreleased
+
+- Give a VM a nickname with **N** in Your VMs. Nicknames are saved in Nebius
+  labels and shown alongside the original VM name. Leave the field blank to
+  remove one; VM names, SSH settings and other labels stay unchanged.
+
 ## 0.8.4 · 2026-09-17 · API client identification
 
 - Identify plugin-originated API calls as `omarchy-nebius/<version>` using the

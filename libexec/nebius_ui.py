@@ -77,11 +77,15 @@ def allocation_label(value: str) -> str:
     return "Preemptible" if value == "preemptible" else "On-demand"
 
 
+def vm_title(vm) -> str:
+    return vm.get("nickname") or vm["name"]
+
+
 def menu_shortcuts(rows, actions):
     """Stable action letters; numbered shortcuts for resource choices."""
     preferred = {"connect": "c", "stop": "s", "start": "t", "delete": "d", "ports": "p",
                  "settings": "e", "storage": "o", "details": "i", "add": "n", "open": "o",
-                 "copy": "c", "pause": "p", "resume": "r", "remove": "d", "name": "n",
+                 "copy": "c", "pause": "p", "resume": "r", "remove": "d", "name": "n", "nickname": "n",
                  "allocation": "p", "project": "l", "review": "r", "reuse": "u",
                  "repair": "f", "recover": "r", "archive": "a", "__new": "n",
                  "overview": "v", "get": "g", "capacity": "c", "activity": "a", "account": "s"}
@@ -430,15 +434,19 @@ class App:
                 if index is not None:
                     return filtered[index][2]
 
-    def edit(self, title, initial, *, notes=None, validate=None):
+    def edit(self, title, initial, *, notes=None, validate=None, subtitle="Edit the proposal or press Enter to keep it", submit_label="continue"):
         value = initial
         cursor = len(value)
         issue = ""
         while True:
-            bottom = self.frame(title, "Edit the proposal or press Enter to keep it", "Enter continue   Ctrl+U clear   ←→ move cursor   Esc back")
-            self.put(7, 3, value[:cursor] + "▏" + value[cursor:], curses.A_REVERSE)
+            bottom = self.frame(title, subtitle, f"Enter {submit_label}   Ctrl+U clear   ←→ move cursor   Esc back")
+            start = 0
+            width = max(1, self.screen.getmaxyx()[1] - 8)
+            while start < cursor and cell_width(value[start:cursor]) > width - 2:
+                start += 1
+            self.put(7, 3, ("…" if start else "") + value[start:cursor] + "▏" + value[cursor:], curses.A_REVERSE)
             y = 10
-            for note in (notes or []) + ([issue] if issue else []):
+            for note in ([issue] if issue else []) + (notes or []):
                 for line in self.wrap(note):
                     if y >= bottom:
                         break
@@ -1165,7 +1173,7 @@ class App:
                     ports.change(choice["id"], action)
 
     def vm_actions(self, vm, action=None):
-        if vm.get("operation_job_id") and action in {"start", "stop", "delete", "operation"}:
+        if vm.get("operation_job_id") and action in {"start", "stop", "delete", "nickname", "operation"}:
             self.watch(vm["operation_job_id"], "Operation progress · " + vm["name"])
             return
         if vm.get("recovery_id"):
@@ -1183,6 +1191,8 @@ class App:
         if not vm.get("instance_deleted") and not service_managed:
             rows += [("SSH port forwarding", "Open remote apps at localhost; manage saved ports", "ports")]
             rows += [("Connection settings", "Edit the saved SSH username", "settings")]
+            if not vm.get("operation_job_id") and vm["state"] in {"running", "stopped"}:
+                rows += [("Nickname", "Saved in Nebius; keeps the original VM name", "nickname")]
         rows = [(*row, "VM actions") for row in rows]
         if not vm.get("instance_deleted"):
             rows += [("Disks and storage", "Inspect attached disks and cleanup options", "storage", "Inspect")]
@@ -1192,9 +1202,10 @@ class App:
             rows += [("Delete remaining boot disk" if vm.get("instance_deleted") else "Delete VM and boot disk",
                       "Permanent deletion; disk charges continue until removed", "delete", "Delete")]
         if action is None:
-            action = self.menu(vm["name"], rows, subtitle=f"{vm['state']} · {vm['region']} · {allocation_label(vm['allocation'])}",
+            action = self.menu(vm_title(vm), rows, subtitle=f"{vm['state']} · {vm['region']} · {allocation_label(vm['allocation'])}",
                                notes=(["Kubernetes manages this node's lifecycle; use the cluster rather than Compute VM actions."]
-                                      if vm.get("kubernetes_node") else [vm["project_name"]]))
+                                      if vm.get("kubernetes_node") else [vm["project_name"]])
+                               + (["VM: " + vm["name"]] if vm.get("nickname") else []))
         elif action not in {row[2] for row in rows}:
             self.message("Action unavailable", "This action is not available for " + vm["name"] + " in its current state.")
             return
@@ -1204,6 +1215,15 @@ class App:
             self.open_ssh(vm)
         elif action == "ports":
             self.ports(vm)
+        elif action == "nickname":
+            nickname = self.edit("Nickname", vm.get("nickname") or "", validate=core.validate_nickname,
+                                 subtitle="Saved in Nebius; the VM name stays unchanged", submit_label="save",
+                                 notes=["VM: " + vm["name"], "Up to 64 characters. Leave blank to remove."])
+            if nickname != (vm.get("nickname") or ""):
+                result = self.mutate("Saving nickname · " + vm["name"], "set-nickname", "--vm-id", vm["id"],
+                                     "--nickname=" + nickname)
+                vm["nickname"] = result["nickname"]
+                self.notice = "Nickname saved" if nickname else "Nickname removed"
         elif action == "timings":
             launch = jobs.latest_vm_job(vm["id"])
             if launch and launch.get("phase") in {"running", "queued"}:
@@ -1307,10 +1327,16 @@ class App:
             for vm in vms:
                 detail = (f"{catalog.gpu_name(vm['platform'])} · {vm['region']} · {allocation_label(vm['allocation'])}\n"
                           f"Project: {vm['project_name']}" + ("\n" + vm["operation_note"] if vm.get("operation_note") else ""))
+                if vm.get("nickname"):
+                    detail = "VM: " + vm["name"] + "\n" + detail
                 if vm.get("kubernetes_node"):
                     detail = "Kubernetes node · lifecycle managed by its cluster\n" + detail
-                rows.append((f"{vm['name']} · {vm['state'].upper()}" + (" · saved state" if vm.get("stale") else ""),
-                             detail, vm, "Virtual machines"))
+                suffix = f" · {vm['state'].upper()}" + (" · saved state" if vm.get("stale") else "")
+                title = vm_title(vm)
+                short_title = fit(title, max(1, self.screen.getmaxyx()[1] - 11 - cell_width(suffix)))
+                if short_title != title:
+                    detail += "\n" + ("Nickname: " if vm.get("nickname") else "VM: ") + title
+                rows.append((short_title + suffix, detail, vm, "Virtual machines"))
             rows += [(item["name"] + " · LAUNCH UNCONFIRMED", item["project"]["region"] + " · check this request; not a VM health status", {"recovery": item}, "Launch requests")
                      for item in displayed.get("recovery", [])]
             rows += [(item["name"] + " · BOOT DISK AVAILABLE", "No VM created · " + item["project"]["project_name"] + " · ready to reuse",
@@ -1341,9 +1367,10 @@ class App:
                              "s": lambda vm: {"vm_action": "stop", "vm": vm},
                              "t": lambda vm: {"vm_action": "start", "vm": vm},
                              "c": lambda vm: {"vm_action": "connect", "vm": vm},
+                             "n": lambda vm: {"vm_action": "nickname", "vm": vm},
                              "a": "__activity", "r": "__refresh", "g": "__get", "i": "__errors", "e": "__preferences",
                              "m": lambda vm: {"manage": vm}},
-                    footer="↑↓ / j k move   Enter actions   C SSH   P ports   D delete   S stop   T start   A activity   R refresh   G GPU   I info   E settings   Esc home")
+                    footer="↑↓ / j k move   Enter actions   C SSH   P ports   N nickname   D delete   S stop   T start   A activity   R refresh   G GPU   I info   E settings   Esc home")
                 target = choice.get("vm", choice.get("manage", choice)) if isinstance(choice, dict) else None
                 if isinstance(target, dict) and target.get("id"):
                     selected_id = target["id"]

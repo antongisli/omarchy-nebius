@@ -30,7 +30,7 @@ def apply_jobs(snapshot, entries):
         vm = dict(item)
         job = latest.get(vm['id'], {})
         command, phase = job.get('command'), job.get('phase')
-        if command not in {'create', 'start', 'stop', 'delete'}:
+        if command not in {'create', 'start', 'stop', 'delete', 'set-nickname'}:
             vms.append(vm)
             continue
         result = job.get('result') or {}
@@ -38,14 +38,19 @@ def apply_jobs(snapshot, entries):
             continue  # A completed deletion is authoritative even during list propagation.
         if phase in {'queued', 'running'}:
             vm.update(cloud_state=vm['state'], operation_job_id=job['id'], operation_phase=phase)
-            vm['state'] = {'create': 'creating', 'start': 'starting', 'stop': 'stopping', 'delete': 'deleting'}[command]
+            vm['state'] = {'create': 'creating', 'start': 'starting', 'stop': 'stopping', 'delete': 'deleting'}.get(command, vm['state'])
+            if command == 'set-nickname':
+                vm['operation_note'] = 'Saving nickname · A for progress'
             if command in {'create', 'start'} and job.get('operation', {}).get('stage') == 'ssh':
                 vm['state'] = 'waiting for ssh'
         elif phase == 'ready' and job.get('finished_at', '') > snapshot.get('updated_at', ''):
+            if command == 'set-nickname' and 'nickname' in result:
+                vm['nickname'] = result['nickname']
             if result.get('state') in {'running', 'stopped'}:
                 vm['state'] = result['state']
         elif phase in {'error', 'interrupted'} and job.get('finished_at', job.get('started_at', '')) > snapshot.get('updated_at', ''):
-            vm['operation_note'] = f'{command.capitalize()} {"failed" if phase == "error" else "needs checking"} · A for details'
+            label = 'Nickname save' if command == 'set-nickname' else command.capitalize()
+            vm['operation_note'] = f'{label} {"failed" if phase == "error" else "needs checking"} · A for details'
         vms.append(vm)
     reusable = [row for row in snapshot.get('reusable_disks', [])
                 if not (latest.get(row['disk_id'], {}).get('phase') == 'ready'

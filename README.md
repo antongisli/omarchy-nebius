@@ -93,7 +93,7 @@ From the Nebius panel:
 | **U** | Uninstall plugin |  |  |
 | **E** | Settings | **Shift+K** | Opening shortcut |
 
-Navigate with **arrows / j/k**, **Enter** and **Esc**. **/** searches; **?** shows help. In **Your VMs**, highlight a running machine and press **C** to connect. In GPU menus, **P** switches allocation type.
+Navigate with **arrows / j/k**, **Enter** and **Esc**. **/** searches; **?** shows help. In **Your VMs**, highlight a running machine and press **C** to connect, or **N** to give it a nickname saved in Nebius. In GPU menus, **P** switches allocation type.
 
 **Super+Ctrl+M** opens Nebius after setup, wherever its icon sits. Change it with **Shift+K · Shortcuts** in the panel or manager: arrows choose modifiers, type a key, Enter saves. Occupied keys are left alone. An optional [direct GPU binding →](config/keybindings.lua) is also available.
 

@@ -41,7 +41,7 @@ def describe(job):
     result = job.get("result") if isinstance(job.get("result"), dict) else {}
     names = {"create": "Create VM", "create-project": "Create project", "start": "Start VM", "stop": "Stop VM",
              "delete": "Delete VM", "delete-disk": "Delete boot disk", "recover": "Recover launch",
-             "repair-rejected": "Check rejected launches", "archive-request": "Archive launch request"}
+             "repair-rejected": "Check rejected launches", "archive-request": "Archive launch request", "set-nickname": "Edit nickname"}
     title = job.get("title")
     if not title or title == command:
         title = names.get(command, "Operation")
@@ -55,7 +55,8 @@ def describe(job):
         if message in {None, "", "Operation completed", "Checking your request", "Waiting for worker"}:
             message = {"create": "VM created", "create-project": "Project created", "start": "VM started",
                        "stop": "VM stopped", "delete-disk": "Boot disk deleted", "delete": "VM and boot disk deleted" if result.get("disk_deleted") else "VM deletion completed",
-                       "recover": "Launch recovered", "archive-request": "Request archived locally"}.get(command, "Operation completed")
+                       "recover": "Launch recovered", "archive-request": "Request archived locally",
+                       "set-nickname": "Nickname saved" if result.get("nickname") else "Nickname removed"}.get(command, "Operation completed")
     elif phase == "error":
         raw = operation.get("message") if operation.get("phase") == "error" else job.get("error")
         message = core.explain_error(str(raw))["message"] if raw else "The operation failed. Open details to check its outcome."
@@ -127,7 +128,7 @@ def jobs():
 
 
 def submit(arguments, title=""):
-    if arguments[0] in {"start", "stop", "delete", "delete-disk"}:
+    if arguments[0] in {"start", "stop", "delete", "delete-disk", "set-nickname"}:
         flag, prefix = ("--disk-id", "computedisk") if arguments[0] == "delete-disk" else ("--vm-id", "computeinstance")
         if flag not in arguments or not re.fullmatch(prefix + r"-[A-Za-z0-9_-]+", arguments[arguments.index(flag) + 1]):
             raise core.NebiusError("Invalid resource ID")
