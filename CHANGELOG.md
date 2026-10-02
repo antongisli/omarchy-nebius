@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Agent tools are now opt-in. Setup no longer adds the Nebius MCP server to
+  Codex or Claude Code; choose **E · Settings** to add or remove it for each
+  agent after a confirmation screen. Existing registrations are left in place
+  and can be removed from the same screen.
+- The bar widget renders all status and activity text as plain text, and the
+  tooltip strips markup delimiters, so error messages from the CLI cannot be
+  interpreted as rich text.
 - Give a VM a nickname with **N** in Your VMs. Nicknames are saved in Nebius
   labels and shown alongside the original VM name. Leave the field blank to
   remove one; VM names, SSH settings and other labels stay unchanged.

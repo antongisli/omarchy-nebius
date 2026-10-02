@@ -58,7 +58,7 @@ def status() -> dict[str, Any]:
     return {
         "installed": installed,
         "ready": ready,
-        "detail": "Constrained tools registered" if ready else "Needs registration" if installed else "Not installed",
+        "detail": "Constrained tools registered" if ready else "Not added" if installed else "Not installed",
         "server": SERVER_NAME,
     }
 
@@ -84,12 +84,31 @@ def ensure() -> dict[str, Any]:
     return value
 
 
+def remove() -> dict[str, Any]:
+    """Remove only this plugin's exact registration; never an unrelated server."""
+    current = _current()
+    if current and not _matches(current):
+        raise RegistrationError(
+            f"Claude Code has an MCP server named {SERVER_NAME} that this plugin did not create; leaving it unchanged"
+        )
+    if current:
+        result = subprocess.run(
+            [_claude(), "mcp", "remove", "--scope", "user", SERVER_NAME],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+        if result.returncode != 0:
+            raise RegistrationError(result.stderr.strip() or "Could not remove the Claude Code MCP server")
+        if _matches(_current()):
+            raise RegistrationError("Claude Code still has the Nebius MCP registration")
+    return status()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("ensure", "status"))
+    parser.add_argument("command", choices=("ensure", "remove", "status"))
     args = parser.parse_args()
     try:
-        print(json.dumps(ensure() if args.command == "ensure" else status(), sort_keys=True))
+        print(json.dumps({"ensure": ensure, "remove": remove, "status": status}[args.command](), sort_keys=True))
         return 0
     except RegistrationError as error:
         print(f"Nebius Claude Code MCP: {error}", file=sys.stderr)

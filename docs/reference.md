@@ -13,11 +13,13 @@ The plugin uses a dedicated profile and does not modify unrelated integrations.
 - Uses the selected tenant without locking the plugin to one project. Projects created by the signed-in user are preferred; shared tenant projects are hidden from normal placement.
 - Downloads and tests Nebius MCP commit `6388bf779acdd331d9b2016230b37f8bf7177e12` in a plugin-private uv cache. It requires Python 3.13+; uv provisions the runtime environment.
 - Creates a dedicated Ed25519 key at `~/.ssh/nebius-ed25519` for plugin-created VMs.
-- Detects Omarchy's configured agent and registers a constrained `nebius` MCP server with each installed supported agent: Codex and Claude Code. It exposes typed capacity, project setup, plan, create, list, start, stop, delete, and connect tools—never a free-form command executor.
+- Reports whether Codex or Claude Code is installed and whether Nebius tools were already added. Setup never adds, changes or removes agent MCP registrations.
 - Keeps the upstream MCP runtime private to its narrow compatibility bridge.
 - Uses a normal tiled setup terminal so browser authentication never leaves a blocking floating overlay.
 
-The installer is re-runnable and does not edit shell profiles. It uses each agent's own CLI to add only the `nebius` MCP registration to `~/.codex/config.toml` and/or `~/.claude.json`, and refuses to overwrite a server with the same name but a different command. Agent installation is not required for the keyboard manager; it is required only for natural-language actions. Setup reports when neither supported agent is installed and reports sign-in separately for every agent it finds.
+The installer is re-runnable and does not edit shell profiles or agent configuration.
+
+Agent tools are a separate, per-agent opt-in under **E · Settings**. Each agent has its own row; adding tools shows what will be registered and requires pressing **A** on the confirmation screen. The plugin then uses that agent's own CLI to add only a user-level `nebius` MCP server to `~/.codex/config.toml` or `~/.claude.json`, and refuses to overwrite a server with the same name but a different command. The registered server exposes typed capacity, project setup, plan, create, list, start, stop, delete, connect and uninstall tools, never a free-form command executor. The same row removes the plugin's exact registration after confirmation with **R** and leaves unrelated servers alone. Agents are not required for the keyboard manager.
 
 Omarchy supplies the ordinary terminal tools used by setup: Python, Bash, jq, curl, OpenSSH, fzf, gum and util-linux. Package installation runs visibly and may ask for your password; the plugin does not silently escalate privileges.
 
@@ -196,7 +198,7 @@ Use arrows or `j/k`, Enter, Escape/back, and `/` search throughout the terminal.
 - `R` — refresh the current capacity/inventory view, or panel status.
 - `U` — **Uninstall Nebius plugin** and its local setup. The confirmation explicitly warns that cloud resources remain unchanged and may continue to incur charges.
 
-For natural-language use, choose Codex or Claude Code in Omarchy, sign in to that agent, and start a new agent session to load the updated tools. Ask “show GPU capacity” or “get me a VM and put me in it.” The agent presents GPU choices before project placement, shows the plan, asks for a normal confirmation, and relies on write-tool approval instead of a typed magic phrase.
+For natural-language use, add Nebius tools to Codex or Claude Code under **E · Settings**, sign in to that agent, and start a new agent session to load the tools. Ask “show GPU capacity” or “get me a VM and put me in it.” The agent presents GPU choices before project placement, shows the plan, asks for a normal confirmation, and relies on write-tool approval instead of a typed magic phrase.
 
 VM lists refresh local job state every two seconds and fetch cloud inventory asynchronously (every five seconds while work is active, otherwise every thirty seconds, and on operation completion). Rows show Creating, Starting, Stopping, Deleting, or Waiting for SSH as appropriate. Managed Kubernetes nodes are identified from Nebius node-group ownership and provider-managed metadata rather than their names. They are hidden by default; the inventory reports how many were omitted. Confirmed deletion removes the row immediately; failed operations retain the VM. Navigation and search remain intact during refresh. Failed reads keep the last known inventory and show retry feedback. Pressing the same lifecycle action during an active operation follows its existing job.
 
@@ -306,4 +308,4 @@ The repository declares `entryPoints.uninstall` as `bin/nebius-cleanup`. On a ho
 
 The proposal is [Omarchy PR #11470](https://github.com/omacom/omarchy/pull/11470). It is an optional convenience, not a dependency or a prerequisite for releasing the standalone uninstall flow. Until a host implements it, use the panel, agent tool or direct command above. Do not claim that bare native removal is complete on older hosts. `--skip-cleanup` on hook-enabled hosts deliberately bypasses cleanup and may leave setup artifacts.
 
-After a complete removal, reinstall with the command in the [README](../README.md#install). To exercise every dependency step, explicitly choose to remove the CLI, SSH key and uv; if kept, setup recognizes and reuses them. Start a new Codex or Claude Code session after reinstalling so it loads the new MCP registration.
+After a complete removal, reinstall with the command in the [README](../README.md#install). To exercise every dependency step, explicitly choose to remove the CLI, SSH key and uv; if kept, setup recognizes and reuses them. To use an agent again after reinstalling, add its tools under **E · Settings** and start a new session.

@@ -113,7 +113,7 @@ Forwards survive closing the menu and reconnect after sleep. **Connected** means
 
 ## 🤖 Or just ask
 
-Setup adds Nebius tools to installed **Codex** and **Claude Code** agents. Sign in to your agent and start a new session, then try:
+Nebius tools for **Codex** and **Claude Code** are opt-in. Setup does not change agent configuration; choose **E · Settings** and add the tools to each agent you want to use. Sign in to that agent and start a new session, then try:
 
 > Show me GPU availability by region.
 

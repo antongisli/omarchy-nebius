@@ -40,12 +40,15 @@ Panel {
   readonly property bool ready: snapshot.ready === true
   readonly property bool busy: snapshot.operation && snapshot.operation.phase === "running"
   readonly property bool needsReconnect: snapshot.account && snapshot.account.detail === "Reconnect required"
-  readonly property string barTooltip: !countVisible
+  // The host renders tooltips with automatic format detection, so remove angle
+  // brackets rather than rely on a textFormat this widget cannot set.
+  function plainTooltip(value) { return String(value).replace(/[<>]/g, "") }
+  readonly property string barTooltip: plainTooltip(!countVisible
     ? "Nebius · Set up Nebius\nOpen the panel and press S to connect your account."
     : (needsReconnect ? "Nebius session expired — reconnect required\n" : "Nebius · ")
       + countSummary + "\nRunning VMs in your visible personal projects"
       + (countCurrent ? " · checked within 90s" : "\n" + (vmCount.detail || "Refresh needed"))
-      + (busy ? "\nOperation in progress" : "")
+      + (busy ? "\nOperation in progress" : ""))
   readonly property var actions: ready ? [
     { key: "G", title: "Get a GPU VM", screen: "get" },
     { key: "P", title: "SSH port forwarding", screen: "ports" },
@@ -213,6 +216,7 @@ Panel {
           border.width: 1
           border.color: root.brandInk
           Text {
+            textFormat: Text.PlainText
             anchors.centerIn: parent
             text: root.badgeLabel
             color: root.brandInk
@@ -275,6 +279,7 @@ Panel {
             }
             Item { Layout.fillWidth: true }
             Text {
+              textFormat: Text.PlainText
               text: root.busy ? "WORKING" : root.ready ? "CONNECTED" : root.needsReconnect ? "RECONNECT" : "SETUP"
               color: root.needsReconnect ? root.urgent : root.foreground
               font.family: root.fontFamily
@@ -282,6 +287,7 @@ Panel {
             }
           }
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: root.needsReconnect
               ? "Nebius session expired — reconnect required.\nPress S or Enter to reconnect."
@@ -315,6 +321,7 @@ Panel {
           }
           PanelSeparator { width: parent.width; foreground: root.foreground }
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: root.activityText()
             wrapMode: Text.WrapAnywhere
@@ -325,6 +332,7 @@ Panel {
             font.pixelSize: Style.font.caption
           }
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: "Enter opens · R refreshes status · Esc closes"
             wrapMode: Text.WordWrap

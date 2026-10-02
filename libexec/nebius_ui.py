@@ -32,6 +32,8 @@ import nebius_timing as timing
 import nebius_ports as ports
 import nebius_ssh as ssh_client
 import nebius_shortcuts as shortcuts
+import nebius_codex_mcp as codex_mcp
+import nebius_claude_mcp as claude_mcp
 
 
 class Back(Exception):
@@ -1525,17 +1527,68 @@ class App:
             except (core.NebiusError, OSError) as error:
                 self.message("Shortcut not saved", str(error), error=True)
 
+    AGENT_TOOLS = {
+        "codex": ("Codex", codex_mcp, "~/.codex/config.toml"),
+        "claude": ("Claude Code", claude_mcp, "~/.claude.json"),
+    }
+
+    def agent_status(self, key):
+        try:
+            return self.AGENT_TOOLS[key][1].status()
+        except Exception as error:  # A broken agent config must not hide other settings.
+            return {"installed": True, "ready": False, "detail": str(error)}
+
+    def toggle_agent_tools(self, key):
+        """Agent configuration changes only after an explicit per-agent confirmation."""
+        name, module, config = self.AGENT_TOOLS[key]
+        current = self.agent_status(key)
+        if not current.get("installed"):
+            self.message(f"{name} not installed", f"Install {name} in Omarchy first. Keyboard controls work without an agent.")
+            return
+        adding = not current.get("ready")
+        if adding:
+            confirmed = self.confirm_launch([
+                f"Add a user-level MCP server named \"nebius\" to {name} ({config}).",
+                f"New {name} sessions will load typed Nebius tools for capacity, planning, creating, listing, "
+                "starting, stopping, deleting and connecting to VMs, plus plugin uninstall. "
+                "There is no free-form command tool. Billable and destructive tools still ask for approval in the agent.",
+                "Nothing else in the agent configuration changes. You can remove the tools here at any time.",
+            ], f"Registered command: python3 {module.AGENT_MCP}", action=f"add Nebius tools to {name}", title=f"{name} tools", confirm_key="a")
+        else:
+            confirmed = self.confirm_launch([
+                f"Remove the plugin's \"nebius\" MCP server from {name} ({config}).",
+                "Other MCP servers and agent settings are unchanged. Keyboard controls keep working.",
+            ], f"Registered command: python3 {module.AGENT_MCP}", action=f"remove Nebius tools from {name}", title=f"{name} tools", confirm_key="r")
+        if not confirmed:
+            return
+        try:
+            module.ensure() if adding else module.remove()
+        except module.RegistrationError as error:
+            self.message(f"{name} not changed", str(error), error=True)
+            return
+        self.notice = (f"Nebius tools added to {name}. Start a new {name} session to load them." if adding
+                       else f"Nebius tools removed from {name}.")
+
     def preferences(self):
         while True:
             current = core.inventory_preferences()["include_kubernetes_nodes"]
             state = "SHOWN" if current else "HIDDEN"
-            choice = self.menu("Settings", [
+            rows = [
                 ("Kubernetes nodes  [ " + state + " ]",
                  "Include cluster worker VMs in Your VMs, SSH choices and the running-VM badge"
                  if current else "Keep cluster worker VMs out of Your VMs, SSH choices and the running-VM badge",
-                 "kubernetes"),
-            ], subtitle="VM visibility", notes=[
-                "Kubernetes nodes are hidden by default. When shown, they are identified as cluster-managed and have no direct lifecycle actions."
+                 "kubernetes", "VM visibility"),
+            ]
+            for key, (name, _module, _config) in self.AGENT_TOOLS.items():
+                status = self.agent_status(key)
+                label = "ADDED" if status.get("ready") else "NOT ADDED" if status.get("installed") else "NOT INSTALLED"
+                rows.append((f"{name} tools  [ {label} ]",
+                             "Remove the Nebius MCP server from this agent" if status.get("ready")
+                             else "Optionally let this agent use Nebius tools" if status.get("installed")
+                             else f"{name} is not installed", key, "Agent tools (optional)"))
+            choice = self.menu("Settings", rows, subtitle="VM visibility and agent tools", notes=[
+                "Kubernetes nodes are hidden by default. When shown, they are identified as cluster-managed and have no direct lifecycle actions.",
+                "Setup never changes agent configuration. Agent tools are added only when you choose them here.",
             ], actions={"i": "kubernetes"},
                 footer="↑↓ / j k move   Enter toggle   I include / hide Kubernetes nodes   Esc back")
             if choice == "kubernetes":
@@ -1543,6 +1596,8 @@ class App:
                 self.inventory = {}
                 self.notice = ("Kubernetes nodes are now shown." if updated["include_kubernetes_nodes"]
                                else "Kubernetes nodes are now hidden.")
+            elif choice in self.AGENT_TOOLS:
+                self.toggle_agent_tools(choice)
 
     def account(self):
         curses.def_prog_mode()
@@ -1596,7 +1651,7 @@ class App:
                     ("[P] SSH port forwarding", "Open remote apps locally; add, pause or remove ports", "ports", "Manage"),
                     ("[A] Activity", "Follow concurrent operations and inspect results", "activity", "Manage"),
                     ("[S] Account / reconnect", "Connect your Nebius account and tools", "account", "Account"),
-                    ("[E] Settings", "Choose which cloud VMs appear in listings and counts", "preferences", "Settings"),
+                    ("[E] Settings", "VM visibility and optional Codex / Claude Code tools", "preferences", "Settings"),
                     ("[Shift+K] Shortcuts", "Choose the key that opens Nebius", "shortcuts", "Settings"),
                 ], subtitle="Your projects · keyboard first", notes=[note] if note else [],
                     actions={"g": "get", "v": "overview", "c": "capacity", "a": "activity", "s": "account", "p": "ports", "e": "preferences", "K": "shortcuts"},

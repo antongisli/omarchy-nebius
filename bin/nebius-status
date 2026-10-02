@@ -176,7 +176,7 @@ if [[ -f $SSH_KEY && -f $SSH_KEY.pub ]] && [[ $(stat -c '%a' "$SSH_KEY" 2>/dev/n
 fi
 
 agent_ready=false
-agent_detail="No Codex or Claude Code agent"
+agent_detail="Not added (optional)"
 agent_names=()
 for agent_spec in "Codex|$CODEX_MCP" "Claude Code|$CLAUDE_MCP"; do
   agent_name=${agent_spec%%|*}

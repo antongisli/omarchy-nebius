@@ -114,7 +114,33 @@ def ensure() -> dict[str, Any]:
     return status()
 
 
+def _installed() -> bool:
+    try:
+        _codex()
+    except RegistrationError:
+        return False
+    return True
+
+
+def remove() -> dict[str, Any]:
+    """Remove only this plugin's exact registration; never an unrelated server."""
+    current = _current()
+    if current and not _matches(current):
+        raise RegistrationError(
+            f"Codex has an MCP server named {SERVER_NAME} that this plugin did not create; leaving it unchanged"
+        )
+    if current:
+        result = _run([_codex(), "mcp", "remove", SERVER_NAME])
+        if result.returncode != 0:
+            raise RegistrationError(result.stderr.strip() or "Could not remove the Codex MCP server")
+        if _matches(_current()):
+            raise RegistrationError("Codex still has the Nebius MCP registration")
+    return status()
+
+
 def status() -> dict[str, Any]:
+    if not _installed():
+        return {"installed": False, "ready": False, "detail": "Not installed", "server": SERVER_NAME}
     current = _current()
     ready = _matches(current)
     settings_ready = False
@@ -127,18 +153,19 @@ def status() -> dict[str, Any]:
         except (OSError, tomllib.TOMLDecodeError):
             settings_ready = False
     return {
+        "installed": True,
         "ready": ready and settings_ready,
-        "detail": "Constrained tools registered" if ready and settings_ready else "Needs registration",
+        "detail": "Constrained tools registered" if ready and settings_ready else "Not added",
         "server": SERVER_NAME,
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("ensure", "status"))
+    parser.add_argument("command", choices=("ensure", "remove", "status"))
     args = parser.parse_args()
     try:
-        print(json.dumps(ensure() if args.command == "ensure" else status(), sort_keys=True))
+        print(json.dumps({"ensure": ensure, "remove": remove, "status": status}[args.command](), sort_keys=True))
         return 0
     except RegistrationError as error:
         print(f"Nebius Codex MCP: {error}", file=sys.stderr)

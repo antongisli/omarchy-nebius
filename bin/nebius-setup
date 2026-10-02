@@ -342,64 +342,36 @@ python3 "$CORE" ensure-key >/dev/null
 say "✓ Dedicated SSH key ready"
 
 stage="agent"
-write_state "running" "$stage" "Checking Omarchy agents and adding constrained Nebius tools"
-say "● Checking Omarchy agent setup"
-default_agent=$(omarchy-default-agent 2>/dev/null || true)
-agent_count=0
-agent_names=()
-
-agent_list() {
-  if (( ${#agent_names[@]} == 2 )); then
-    printf 'Codex + Claude Code'
-  elif (( ${#agent_names[@]} == 1 )); then
-    printf '%s' "${agent_names[0]}"
-  fi
-}
-
-if command -v codex >/dev/null 2>&1; then
-  agent_count=$((agent_count + 1))
-  agent_existed=false
-  python3 "$CODEX_MCP" status 2>/dev/null | jq -e '.ready == true' >/dev/null 2>&1 && agent_existed=true
-  python3 "$CODEX_MCP" ensure >/dev/null
-  [[ $agent_existed == false ]] && mark_owned codex_mcp
-  agent_names+=("Codex")
-  if codex login status >/dev/null 2>&1; then
-    say "✓ Codex tools registered and signed in"
+write_state "running" "$stage" "Checking optional agent tools"
+# General setup never edits agent configuration. Adding Nebius tools to Codex
+# or Claude Code is a separate, per-agent choice in E · Settings.
+say "● Checking optional agent tools"
+agent_added=()
+agent_available=()
+for agent_spec in "Codex|codex|$CODEX_MCP" "Claude Code|claude|$CLAUDE_MCP"; do
+  IFS='|' read -r agent_name agent_command agent_script <<<"$agent_spec"
+  command -v "$agent_command" >/dev/null 2>&1 || continue
+  if python3 "$agent_script" status 2>/dev/null | jq -e '.ready == true' >/dev/null 2>&1; then
+    agent_added+=("$agent_name")
   else
-    say "○ Codex tools registered; sign in before using natural-language actions"
+    agent_available+=("$agent_name")
   fi
-fi
-
-if command -v claude >/dev/null 2>&1; then
-  agent_count=$((agent_count + 1))
-  agent_existed=false
-  python3 "$CLAUDE_MCP" status 2>/dev/null | jq -e '.ready == true' >/dev/null 2>&1 && agent_existed=true
-  python3 "$CLAUDE_MCP" ensure >/dev/null
-  [[ $agent_existed == false ]] && mark_owned claude_mcp
-  agent_names+=("Claude Code")
-  if claude auth status 2>/dev/null | jq -e '.loggedIn == true' >/dev/null 2>&1; then
-    say "✓ Claude Code tools registered and signed in"
-  else
-    say "○ Claude Code tools registered; sign in before using natural-language actions"
-  fi
-fi
-
-if (( agent_count == 0 )); then
-  say "○ No supported agent installed; choose Codex or Claude Code in Omarchy to add natural-language actions"
-  say "  Keyboard controls remain fully available."
-elif [[ $default_agent != codex && $default_agent != claude ]]; then
-  say "○ Omarchy's default agent is not Codex or Claude Code"
-  say "  Nebius tools are registered with: $(agent_list)."
-else
-  say "✓ Omarchy default agent: $default_agent"
+done
+for agent_name in "${agent_added[@]}"; do
+  say "✓ Nebius tools already added to $agent_name"
+done
+if (( ${#agent_available[@]} > 0 )); then
+  agent_choices=${agent_available[0]}
+  (( ${#agent_available[@]} > 1 )) && agent_choices+=" or ${agent_available[1]}"
+  say "○ Optional: add Nebius tools to $agent_choices from E · Settings"
+  say "  Setup does not change agent configuration. Keyboard controls work without an agent."
+elif (( ${#agent_added[@]} == 0 )); then
+  say "○ No supported agent installed. Keyboard controls remain fully available."
 fi
 
 stage="done"
 write_state "ready" "$stage" "Nebius is ready"
 say ""
 say "✓ Nebius is ready"
-if (( agent_count > 0 )); then
-  say "  Open a new $(agent_list) session to load the constrained Nebius tools."
-fi
 say "  Run 'nebius version' in a regular terminal to use the CLI."
 say "  No shell profile was edited."
