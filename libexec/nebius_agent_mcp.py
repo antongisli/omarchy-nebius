@@ -7,6 +7,7 @@ import json
 import sys
 import nebius_jobs as jobs
 import nebius_ports as ports
+import nebius_pricing as pricing
 import nebius_uninstall as removal
 from nebius_catalog import list_images
 from typing import Any, Callable
@@ -41,7 +42,15 @@ INSTRUCTIONS = (
     "Use list_images to offer available custom or public images after project selection. "
     "Only personal VM destination projects are returned; shared tenant projects are intentionally hidden. If the chosen region has no "
     "personal project, offer to create one and explain that it remains even if VM creation is canceled. Treat project "
-    "as a secondary placement choice. Let the user edit a proposed name and choose on-demand or preemptible allocation. "
+    "as a secondary placement choice. New launches default to Spot (preemptible) with a reusable USD 5.000/GPU-hour policy. "
+    "The default is scoped to a project and exact platform; reuse its current limit and never reset edits. "
+    "Show spot_pricing and price_estimate from the plan, including stale/unavailable data. A cap is per GPU-hour, not a spending budget. "
+    "If USD 5.000 is outside the allowed range, ask the user to choose an allowed limit; never silently clamp it or follow spot price. "
+    "Use list_pricing_policies, create_pricing_policy, update_pricing_policy and set_default_pricing_policy for reusable limits. "
+    "Policy edits affect every VM sharing it. Never stop VMs automatically to edit a policy. "
+    "For Spot starts, first call review_vm_start, show pricing terms and pass pricing_review_id to start_vm. "
+    "For pricing changes on stopped Spot VMs, first call plan_vm_pricing then apply_vm_pricing with its review_id. "
+    "Let the user edit a proposed name and choose on-demand or preemptible allocation. "
     "Run check_vm_quota before creating a project. A plan with preflight.ready=false cannot be created. "
     "list_vms includes existing VMs in personal projects and hides Managed Kubernetes nodes unless the user enabled them in plugin Settings. "
     "If hidden_kubernetes_node_count is nonzero, say that cluster nodes are omitted. Connecting may need a username and the user's SSH keys. "
@@ -128,7 +137,9 @@ TOOLS = [
             "disk_gib": {"type": "integer", "minimum": 50, "maximum": 30720},
             "offering_id": {"type": "string", "description": "GPU option returned by view_gpu_capacity."},
             "project_id": {"type": "string", "description": "Optional compatible project returned with the GPU option."},
-            "allocation": {"type": "string", "enum": ["on_demand", "preemptible"], "default": "on_demand"},
+            "allocation": {"type": "string", "enum": ["on_demand", "preemptible"], "default": "preemptible"},
+            "spot_mode": {"type": "string", "enum": ["default", "policy", "follow"], "default": "default"},
+            "pricing_policy_id": {"type": "string", "description": "Required for policy mode; must match the project and exact GPU platform."},
         },
         ["offering_id"],
         read_only=True,
@@ -153,7 +164,7 @@ TOOLS = [
     tool(
         "start_vm",
         "Start a stopped VM in a personal project and wait for its address. Resumes compute billing.",
-        {"vm_id": {"type": "string"}},
+        {"vm_id": {"type": "string"}, "pricing_review_id": {"type": "string", "description": "Required for Spot VMs; from review_vm_start."}},
         ["vm_id"],
         read_only=False,
     ),
@@ -184,6 +195,29 @@ TOOLS = [
         read_only=True,
     ),
 ]
+TOOLS.extend([
+    tool("list_pricing_policies", "List reusable policies and the saved default for a project/platform.",
+         {"project_id": {"type": "string"}, "platform": {"type": "string"}}, ["project_id"], read_only=True),
+    tool("create_pricing_policy", "Create a reusable USD per-GPU-hour cap after reviewing name, platform and limit. Existing matching named policies are reused.",
+         {"project_id": {"type": "string"}, "platform": {"type": "string"}, "name": {"type": "string"},
+          "max_price": {"type": "string", "description": "Positive USD decimal with at most three decimal places."}},
+         ["project_id", "platform", "name", "max_price"], read_only=False),
+    tool("update_pricing_policy", "Edit a shared policy after reviewing all affected VMs. Limit changes require zero running VMs; never stops VMs automatically.",
+         {"policy_id": {"type": "string"}, "name": {"type": "string"}, "max_price": {"type": "string"},
+          "expected_version": {"type": "string", "description": "resource_version from the reviewed policy."}},
+         ["policy_id", "name", "max_price", "expected_version"], read_only=False),
+    tool("set_default_pricing_policy", "Remember a reusable policy for future Spot launches in this project and platform.",
+         {"project_id": {"type": "string"}, "policy_id": {"type": "string"}}, ["project_id", "policy_id"], read_only=False),
+    tool("inspect_vm_pricing", "Read a VM's actual pricing mode, current policy eligibility and calculator estimate.",
+         {"vm_id": {"type": "string"}}, ["vm_id"], read_only=True),
+    tool("review_vm_start", "Prepare a read-only Spot start review. Show pricing terms and pass its token to start_vm after confirmation.",
+         {"vm_id": {"type": "string"}}, ["vm_id"], read_only=True),
+    tool("plan_vm_pricing", "Review a pricing change for a stopped Spot VM. Creates no cloud resources.",
+         {"vm_id": {"type": "string"}, "spot_mode": {"type": "string", "enum": ["default", "policy", "follow"]},
+          "pricing_policy_id": {"type": "string"}}, ["vm_id"], read_only=True),
+    tool("apply_vm_pricing", "Apply the reviewed pricing change to a stopped Spot VM; never starts it.",
+         {"vm_id": {"type": "string"}, "review_id": {"type": "string"}}, ["vm_id", "review_id"], read_only=False),
+])
 TOOLS.append(tool(
     "check_vm_quota", "Read-only quota check; include project, platform and preset to check project-specific GPU eligibility too.",
     {"region": {"type": "string"}, "project_id": {"type": "string"},
@@ -225,13 +259,25 @@ def _call(name: str, arguments: dict[str, Any]) -> Any:
         "repair_rejected_launches": lambda: repair_rejected_launches(),
         "plan_gpu_vm": lambda: plan_gpu_vm(
             arguments.get("name"), arguments.get("offering_id"), arguments.get("project_id"),
-            arguments.get("allocation", "on_demand"), arguments.get("auto_stop_hours", 0),
-            arguments.get("image_id", ""), arguments.get("disk_gib")
+            arguments.get("allocation", "preemptible"), arguments.get("auto_stop_hours", 0),
+            arguments.get("image_id", ""), arguments.get("disk_gib"),
+            arguments.get("spot_mode", "default"), arguments.get("pricing_policy_id", "")
         ),
         "create_project": lambda: jobs.submit(["create-project", "--region", str(arguments.get("region", "")),
                                                "--name", str(arguments.get("name", "")), "--confirmed"]),
         "create_gpu_vm": lambda: jobs.submit(["create", "--plan-id", str(arguments.get("plan_id", ""))]),
-        "start_vm": lambda: jobs.submit(["start", "--vm-id", str(arguments.get("vm_id", ""))]),
+        "start_vm": lambda: jobs.submit(["start", "--vm-id", str(arguments.get("vm_id", "")),
+                                         "--pricing-review-id", str(arguments.get("pricing_review_id", ""))]),
+        "list_pricing_policies": lambda: pricing.list_policies(arguments["project_id"], arguments.get("platform", "")),
+        "set_default_pricing_policy": lambda: pricing.select_default(arguments["project_id"], arguments["policy_id"]),
+        "create_pricing_policy": lambda: jobs.submit(["pricing-create", "--project-id", arguments["project_id"],
+            "--platform", arguments["platform"], "--name", arguments["name"], "--max-price", arguments["max_price"]]),
+        "update_pricing_policy": lambda: jobs.submit(["pricing-update", "--policy-id", arguments["policy_id"],
+            "--name", arguments["name"], "--max-price", arguments["max_price"], "--expected-version", arguments["expected_version"]]),
+        "inspect_vm_pricing": lambda: pricing.vm_details(arguments["vm_id"]),
+        "review_vm_start": lambda: pricing.review_start(arguments["vm_id"]),
+        "plan_vm_pricing": lambda: pricing.plan_configuration(arguments["vm_id"], arguments.get("spot_mode", "default"), arguments.get("pricing_policy_id", "")),
+        "apply_vm_pricing": lambda: jobs.submit(["set-vm-pricing", "--vm-id", arguments["vm_id"], "--review-id", arguments["review_id"]]),
         "stop_vm": lambda: jobs.submit(["stop", "--vm-id", str(arguments.get("vm_id", ""))]),
         "delete_vm": lambda: submit_delete("delete", "--vm-id", arguments.get("vm_id"), arguments.get("confirmed"), arguments.get("expected_disk_id")),
         "delete_saved_disk": lambda: submit_delete("delete-disk", "--disk-id", arguments.get("disk_id"), arguments.get("confirmed")),

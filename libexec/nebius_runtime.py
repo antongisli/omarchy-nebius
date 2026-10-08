@@ -4,8 +4,9 @@ import os
 from pathlib import Path
 import sys
 
-CLI_VERSION = "0.12.277"
-PREVIOUS_CLI_VERSION = "0.12.269"
+CLI_VERSION = "0.12.287"
+PREVIOUS_CLI_VERSION = "0.12.277"
+OLDER_CLI_VERSION = "0.12.269"
 VERSION = json.loads((Path(__file__).resolve().parents[1] / "manifest.json").read_text())["version"]
 CLIENT_NAME = "omarchy-nebius"
 USER_AGENT_PREFIX = f"{CLIENT_NAME}/{VERSION}"
@@ -31,6 +32,9 @@ def cli_path():
     # Keep existing installations usable until the user runs setup to upgrade.
     if previous.exists() or previous.is_symlink():
         return previous
+    older = private_cli_path(OLDER_CLI_VERSION)
+    if older.exists() or older.is_symlink():
+        return older
     return legacy if legacy.exists() else private
 
 
@@ -39,5 +43,7 @@ if __name__ == "__main__":
         print(USER_AGENT_PREFIX)
     elif sys.argv[1:] == ["previous-cli"]:
         print(private_cli_path(PREVIOUS_CLI_VERSION))
+    elif sys.argv[1:] == ["older-cli"]:
+        print(private_cli_path(OLDER_CLI_VERSION))
     else:
         print(private_cli_path() if sys.argv[1:] == ["private-cli"] else cli_path())

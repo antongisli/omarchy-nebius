@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Spot launches default to a reusable USD 5.000/GPU-hour policy per project and
+  GPU platform. Manage policies and defaults in Settings → Spot pricing policies;
+  VM launch settings select from those saved policies.
+- Live calculator estimates replace fixed preemptible prices. Price limits and
+  storage costs are shown separately; stale or unavailable estimates are explicit.
+- Launch and start recheck policy terms and scheduling eligibility. Limits outside
+  the platform range require a user-chosen value; they are never silently adjusted.
+- Stopped Spot VMs can switch policies after review. Shared policy limits can be
+  edited only when no associated VMs are running. UI and agent tools share these rules.
+
+- Setup pins checksum-verified Nebius CLI `0.12.287` for pricing-policy support.
+  Existing installations should run **Set up / reconnect** once after updating.
+
 - Agent tools are now opt-in. Setup no longer adds the Nebius MCP server to
   Codex or Claude Code; choose **E · Settings** to add or remove it for each
   agent after a confirmation screen. Existing registrations are left in place

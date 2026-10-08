@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "libexec"))
 import nebius_core as core
+import nebius_pricing as pricing
 import nebius_agent_mcp as mcp
 
 
@@ -46,7 +47,9 @@ class ComputeTests(unittest.TestCase):
 
     def plan(self, allocation="on_demand", offering=None):
         with patch.object(core, "gpu_capacity", return_value={"offerings": [offering or copy.deepcopy(OFFERING)]}), \
-             patch.object(core, "preflight_vm", return_value=GOOD):
+             patch.object(core, "preflight_vm", return_value=GOOD), \
+             patch.object(pricing, "resolve", return_value={"mode": "follow", "policy": None, "create_default": False}), \
+             patch.object(pricing, "estimate", return_value={"state": "unavailable"}):
             return core.plan_gpu_vm("training-box", "choice", "project-personal", allocation, 0)
 
     def test_selected_image_and_disk_size_reach_plan_cost_and_disk_request(self):
@@ -55,7 +58,7 @@ class ComputeTests(unittest.TestCase):
         with patch.object(core, "gpu_capacity", return_value={"offerings": [OFFERING]}), \
              patch.object(core, "preflight_vm", return_value=GOOD) as preflight, \
              patch.object(catalog, "get_image", return_value=IMAGE):
-            plan = core.plan_gpu_vm("training-box", "choice", "project-personal", image_id="computeimage-custom")
+            plan = core.plan_gpu_vm("training-box", "choice", "project-personal", allocation="on_demand", image_id="computeimage-custom")
         self.assertEqual(plan["image_id"], "computeimage-custom")
         self.assertEqual(plan["image_family"], "")
         self.assertEqual(plan["disk_gib"], 256)
@@ -73,7 +76,7 @@ class ComputeTests(unittest.TestCase):
         with patch.object(core, "gpu_capacity", return_value={"offerings": [OFFERING]}), \
              patch.object(core, "run_cli") as cli, patch.object(catalog, "get_image", return_value=IMAGE):
             with self.assertRaisesRegex(core.NebiusError, "at least 256"):
-                core.plan_gpu_vm("training-box", "choice", "project-personal", image_id="computeimage-custom", disk_gib=200)
+                core.plan_gpu_vm("training-box", "choice", "project-personal", allocation="on_demand", image_id="computeimage-custom", disk_gib=200)
             cli.assert_not_called()
         self.assertFalse(core.PLAN_DIR.exists())
 

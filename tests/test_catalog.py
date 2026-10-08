@@ -35,7 +35,7 @@ class CatalogTests(unittest.TestCase):
                 'schema': 'nebius.omarchy-capacity/v3', 'offerings': [shape]}))
             result = subprocess.run([sys.executable, str(Path(core.__file__)), 'plan',
                                      '--offering-id', 'l40a', '--project-id', 'project-mine',
-                                     '--name', 'test', '--image-id', 'invalid'],
+                                     '--name', 'test', '--allocation', 'on_demand', '--image-id', 'invalid'],
                                     env={**os.environ, 'HOME': directory, 'XDG_STATE_HOME': directory},
                                     text=True, capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 1)
@@ -152,6 +152,7 @@ class CatalogTests(unittest.TestCase):
         row = catalog.image_row(IMAGE, [SHAPE], 'shared')
         application, _ = app([])
         application.capacity = {'projects': [PROJECT]}
+        application.allocation = 'on_demand'
         menus = iter(['image', 'review'])
         def menu(*args, **kwargs):
             try:

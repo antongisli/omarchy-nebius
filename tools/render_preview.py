@@ -80,6 +80,26 @@ def render(width=80, height=30, allocation="on_demand", surface="capacity"):
         try:
             if surface == "port-form":
                 app.port_form({"name": "inference · H100"}, remote_port=8000, local_port=18000)
+            elif surface == "settings":
+                with patch.object(ui.core, "inventory_preferences", return_value={"include_kubernetes_nodes": False}), \
+                     patch.object(app, "agent_status", return_value={"installed": False, "ready": False}):
+                    app.preferences()
+            elif surface in {"spot-pricing", "spot-policies", "spot-review"}:
+                policy = {"id": "pricingpolicy-example", "name": "development-gpus", "project_id": "project-example",
+                          "platform": "gpu-h200-sxm", "max_price": "5.000", "currency": "USD", "resource_version": "1",
+                          "running_vm_count": 2, "state": "STATE_ACTIVE", "scheduling_state": "SCHEDULING_STATE_ALLOWED"}
+                if surface in {"spot-pricing", "spot-policies"}:
+                    with patch.object(app, "read", return_value={"policies": [policy], "default_policy_id": policy["id"],
+                            "range_note": "Allowed ranges: Nebius console → Billing → Pricing."}):
+                        if surface == "spot-policies":
+                            app.manage_spot_policies("project-example", "gpu-h200-sxm", "development")
+                        else:
+                            app.choose_spot_pricing("project-example", "gpu-h200-sxm")
+                else:
+                    quote = {"state": "current", "compute_per_hour": "20.000", "storage_per_hour": "0.020",
+                             "per_gpu_hour": "2.500", "checked_at": "2026-01-01T12:00:00+00:00"}
+                    app.confirm_launch(ui.pricing.review_lines({"mode": "policy", "policy": policy}, quote, 8),
+                                       "Synthetic pricing preview", title="Review Spot launch")
             elif surface in {"shortcut-form", "shortcut-error"}:
                 app.shortcut_form("SUPER + CTRL + 1" if surface == "shortcut-error" else None,
                                   error="Super+Ctrl+1 is already used by Bar panel 1. Choose another key; nothing was changed."
@@ -199,7 +219,7 @@ if __name__ == "__main__":
     parser.add_argument("--width", type=int, default=80)
     parser.add_argument("--height", type=int, default=30)
     parser.add_argument("--allocation", choices=("on_demand", "preemptible"), default="on_demand")
-    parser.add_argument("--surface", choices=("cover", "capacity", "ports", "port-form", "launch-ready", "launch-progress", "activity", "overview", "overview-deleting", "overview-nickname", "vm-actions", "vm-actions-nickname", "nickname", "delete-review", "home", "shortcuts", "shortcuts-unset", "shortcut-form", "shortcut-error"), default="capacity")
+    parser.add_argument("--surface", choices=("cover", "capacity", "settings", "spot-pricing", "spot-policies", "spot-review", "ports", "port-form", "launch-ready", "launch-progress", "activity", "overview", "overview-deleting", "overview-nickname", "vm-actions", "vm-actions-nickname", "nickname", "delete-review", "home", "shortcuts", "shortcuts-unset", "shortcut-form", "shortcut-error"), default="capacity")
     parser.add_argument("--output", type=Path, default=ROOT / "assets/terminal-preview.svg")
     args = parser.parse_args()
     target = args.output

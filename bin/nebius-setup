@@ -2,9 +2,9 @@
 
 set -Eeuo pipefail
 
-readonly CLI_VERSION="0.12.277"
-readonly CLI_SHA256_X86_64="4862cc3bb8736be3be5e7197ed76b00c2d4b161fcb6d1a8c6df731e9fadfc6f5"
-readonly CLI_SHA256_ARM64="8efa3c9ecd5ccccb283ce110121649ec19a3153985327657abb7e38a692cf5e7"
+readonly CLI_VERSION="0.12.287"
+readonly CLI_SHA256_X86_64="a32623c45958290901d2858f2135f4916724c4621da55a4f3f53a449483539f5"
+readonly CLI_SHA256_ARM64="94a8b53113a10f4f7aabd6e25aed3c0f0707e6ce1ce5d39fa81548a7686d0b85"
 readonly CLI_BASE_URL="https://storage.eu-north1.nebius.cloud/cli/release/$CLI_VERSION/linux"
 readonly MCP_COMMIT="6388bf779acdd331d9b2016230b37f8bf7177e12"
 readonly STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/nebius"

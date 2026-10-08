@@ -52,17 +52,6 @@ IMAGE_FAMILY = "ubuntu24.04-cuda13.0"
 
 # Published PAYG USD prices checked against the official Compute pricing page.
 # Unified platforms are per GPU-hour. L40S also charges CPU and RAM separately.
-PREEMPTIBLE_GPU_USD = {
-    "gpu-b300-sxm": 4.30,
-    "gpu-b200-sxm": 3.95,
-    "gpu-b200-sxm-a": 3.95,
-    "gpu-h200-sxm": 2.45,
-    "gpu-h100-sxm": 2.15,
-    "gpu-rtx6000": 0.95,
-    "gpu-rtx6000-a": 0.95,
-    "gpu-l40s-a": 0.65,
-    "gpu-l40s-d": 0.65,
-}
 ON_DEMAND_GPU_USD = {
     "gpu-b300-sxm": 7.85, "gpu-b200-sxm": 7.15, "gpu-b200-sxm-a": 7.15,
     "gpu-h200-sxm": 4.50, "gpu-h100-sxm": 3.85,
@@ -123,7 +112,7 @@ def mutation_resource(arguments: list[str]) -> str:
     if not arguments:
         return "global"
     command = arguments[0]
-    if command in {"start", "stop", "delete", "set-nickname"} and "--vm-id" in arguments:
+    if command in {"start", "stop", "delete", "set-nickname", "set-vm-pricing"} and "--vm-id" in arguments:
         try:
             return arguments[arguments.index("--vm-id") + 1]
         except IndexError:
@@ -175,6 +164,9 @@ def explain_error(error: str) -> dict[str, str]:
         else:
             message = "This region does not have enough quota for the selected VM."
         recovery = "Choose another region, or request a quota increase in the Nebius console."
+    elif "expired" in lower and ("review" in lower or "plan" in lower):
+        message = "This review has expired."
+        recovery = "Review the current settings and pricing again before continuing."
     elif "expired" in lower or "unauthenticated" in lower:
         message = "Your Nebius session needs reconnecting."
         recovery = "Use Account / reconnect. Your selections and existing resources are kept."
@@ -1029,7 +1021,9 @@ def _availability_score(allocation: dict[str, Any]) -> tuple[int, int]:
 
 def _hourly_estimate(platform: str, gpu_count: int, vcpu_count: int, memory_gib: int,
                      allocation: str = "preemptible", disk_gib: int = DEFAULT_DISK_GIB) -> float | None:
-    gpu_price = (PREEMPTIBLE_GPU_USD if allocation == "preemptible" else ON_DEMAND_GPU_USD).get(platform)
+    if allocation == "preemptible":
+        return None  # Spot requires a current calculator response, never a fixed discount.
+    gpu_price = ON_DEMAND_GPU_USD.get(platform)
     if gpu_price is None:
         return None
     compute = gpu_price * gpu_count
@@ -1054,13 +1048,17 @@ def plan_gpu_vm(
     name: str | None = None,
     offering_id: str | None = None,
     project_id: str | None = None,
-    allocation: str = "on_demand",
+    allocation: str = "preemptible",
     auto_stop_hours: int = 0,
     image_id: str = "",
     disk_gib: int | None = None,
+    spot_mode: str = "default",
+    pricing_policy_id: str = "",
 ) -> dict[str, Any]:
     if allocation not in {"preemptible", "on_demand"}:
         raise NebiusError("Choose on_demand or preemptible allocation")
+    if allocation == "on_demand" and (spot_mode != "default" or pricing_policy_id):
+        raise NebiusError("Spot pricing options cannot be used with on-demand allocation")
     if auto_stop_hours != 0:
         raise NebiusError("Auto-stop has been removed. Reopen the manager and review a new plan. VMs run until stopped manually.")
     if disk_gib is not None and (type(disk_gib) is not int or not 50 <= disk_gib <= 30720):
@@ -1169,6 +1167,16 @@ def plan_gpu_vm(
         image_family="" if plan["reusable_disk"] else plan["image_family"],
         image_id="" if plan["reusable_disk"] else plan["image_id"],
     )
+    if allocation == "preemptible":
+        import nebius_pricing as pricing
+        plan["spot_pricing"] = pricing.resolve(project["project_id"], plan["platform"], spot_mode, pricing_policy_id)
+        plan["preflight"] = pricing.add_preflight(plan["preflight"], plan["spot_pricing"])
+        plan["price_estimate"] = pricing.estimate(plan)
+        plan["pricing_url"] = pricing.PRICING_URL
+        plan["pricing_checked_at"] = plan["price_estimate"].get("checked_at")
+        plan["estimated_usd_per_hour"] = (float(plan["price_estimate"]["total_per_hour"])
+                                           if plan["price_estimate"]["state"] == "current" else None)
+        plan["pricing_note"] = "Spot estimates change with the market. The policy limit is per GPU-hour, not a spending budget. Disks remain billable while stopped."
     PLAN_DIR.mkdir(parents=True, exist_ok=True)
     PLAN_DIR.chmod(0o700)
     _atomic_json(PLAN_DIR / f"{plan['plan_id']}.json", plan)
@@ -1518,8 +1526,12 @@ def _instance_request(plan: dict[str, Any], disk_id: str, *, cloud_init: str | N
         },
     }
     if plan["allocation"] == "preemptible":
-        request["spec"]["preemptible"] = {"on_preemption": "STOP", "priority": 0}
+        import nebius_pricing as pricing
+        if not plan.get("spot_pricing"):
+            raise NebiusError("This older Spot plan has no pricing choice. Review a fresh plan with a pricing policy")
+        request["spec"]["preemptible"] = {"on_preemption": "STOP"}
         request["spec"]["recovery_policy"] = "FAIL"
+        request["spec"].update(pricing.request_fields(plan["spot_pricing"]))
     else:
         request["spec"]["reservation_policy"] = {"policy": "FORBID"}
     return request
@@ -1637,6 +1649,8 @@ def create_gpu_vm(plan_id: str, *, dry_run: bool = False) -> dict[str, Any]:
         raise NebiusError("Plan not found; create a fresh plan")
     if plan.get("auto_stop_hours"):
         raise NebiusError("This old plan included auto-stop, which has been removed. Review a new plan before creating a VM without a timer.")
+    if plan.get("allocation") == "preemptible" and not plan.get("spot_pricing"):
+        raise NebiusError("This older Spot plan has no pricing choice. Review a fresh plan with a pricing policy")
     try:
         expires_at = dt.datetime.fromisoformat(str(plan["expires_at"]))
     except (KeyError, ValueError) as error:
@@ -1679,9 +1693,16 @@ def create_gpu_vm(plan_id: str, *, dry_run: bool = False) -> dict[str, Any]:
             image_id="" if reusable else plan.get("image_id", ""),
         )
         _require_preflight(plan["preflight"])
+        if plan["allocation"] == "preemptible":
+            import nebius_pricing as pricing
+            pricing.require_support()
+            plan["spot_pricing"] = pricing.refresh_terms(plan["spot_pricing"], planned_project["project_id"], plan["platform"])
         ensure_ssh_key()
         request = _instance_request(plan, reusable["disk_id"] if reusable else "computedisk-validation")
         plan["request_validation"] = validate_instance_request(request)
+        if plan["allocation"] == "preemptible":
+            plan["spot_pricing"] = pricing.refresh_terms(plan["spot_pricing"], planned_project["project_id"], plan["platform"], create=True)
+            request = _instance_request(plan, reusable["disk_id"] if reusable else "computedisk-validation")
         plan["security_group_id"] = _ssh_security_group(plan)
         request["spec"]["network_interfaces"][0]["security_groups"] = [{"id": plan["security_group_id"]}]
     except (NebiusError, OSError) as error:
@@ -1890,6 +1911,7 @@ def _is_kubernetes_node(item: dict[str, Any]) -> bool:
 
 
 def _vm_summary(item: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
+    from nebius_pricing import instance_pricing
     metadata, spec, status = (item.get(key, {}) for key in ("metadata", "spec", "status"))
     vm_id = str(metadata.get("id") or "")
     registered = next((vm for vm in _registry()["vms"] if vm.get("id") == vm_id), {})
@@ -1918,6 +1940,7 @@ def _vm_summary(item: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]
         "region": project["region"], "state": str(status.get("state") or "unknown").lower(),
         "platform": resources.get("platform") or "CPU", "preset": resources.get("preset") or "",
         "allocation": "preemptible" if spec.get("preemptible") else "on_demand",
+        "pricing": instance_pricing(item),
         "public_ip": public_ip, "private_ip": private_ip, "ssh_user": username,
         "managed": managed, "service_managed_by": service_owner,
         "kubernetes_node": kubernetes_node,
@@ -2178,9 +2201,13 @@ def stop_vm(vm_id: str, *, automatic: bool = False) -> dict[str, Any]:
 
 
 @cloud_mutation
-def start_vm(vm_id: str) -> dict[str, Any]:
-    _, vm = _accessible_vm(vm_id)
+def start_vm(vm_id: str, pricing_review_id: str = "") -> dict[str, Any]:
+    instance, vm = _accessible_vm(vm_id)
     _require_direct_lifecycle(vm)
+    pending = _read_json(_cloud_operation_path(vm_id), {})
+    if instance.get("spec", {}).get("preemptible") and pending.get("action") != "start":
+        from nebius_pricing import validate_start
+        validate_start(instance, vm, pricing_review_id)
     _write_operation("running", "start", f"Starting {vm['name']}", vm_id=vm_id)
     _compute_mutation("instance", "start", vm_id)
     _write_operation("running", "boot", "VM started; waiting for its address", vm_id=vm_id, name=vm["name"])
@@ -2418,7 +2445,9 @@ def parse_args() -> argparse.Namespace:
     plan.add_argument("--project-id")
     plan.add_argument("--image-id", default="")
     plan.add_argument("--disk-gib", type=int)
-    plan.add_argument("--allocation", choices=("on_demand", "preemptible"), default="on_demand")
+    plan.add_argument("--allocation", choices=("on_demand", "preemptible"), default="preemptible")
+    plan.add_argument("--spot-mode", choices=("default", "policy", "follow"), default="default")
+    plan.add_argument("--pricing-policy-id", default="")
     plan.add_argument("--auto-stop-hours", type=int, default=0, help=argparse.SUPPRESS)
     preflight = sub.add_parser("preflight")
     preflight.add_argument("--region", required=True)
@@ -2445,6 +2474,34 @@ def parse_args() -> argparse.Namespace:
         item.add_argument("--vm-id", required=True)
         if command == "stop":
             item.add_argument("--automatic", action="store_true", help=argparse.SUPPRESS)
+        else:
+            item.add_argument("--pricing-review-id", default="")
+    policies = sub.add_parser("pricing-policies")
+    policies.add_argument("--project-id", required=True)
+    policies.add_argument("--platform", default="")
+    platforms = sub.add_parser("pricing-platforms")
+    platforms.add_argument("--project-id", required=True)
+    for command in ("pricing-create", "pricing-update"):
+        item = sub.add_parser(command)
+        item.add_argument("--name", required=True)
+        item.add_argument("--max-price", required=True)
+        if command == "pricing-create":
+            item.add_argument("--project-id", required=True)
+            item.add_argument("--platform", required=True)
+        else:
+            item.add_argument("--policy-id", required=True)
+            item.add_argument("--expected-version", required=True)
+    preference = sub.add_parser("pricing-default")
+    preference.add_argument("--project-id", required=True)
+    preference.add_argument("--policy-id", required=True)
+    for command in ("vm-pricing", "review-start", "plan-vm-pricing", "set-vm-pricing"):
+        item = sub.add_parser(command)
+        item.add_argument("--vm-id", required=True)
+        if command == "plan-vm-pricing":
+            item.add_argument("--spot-mode", choices=("default", "policy", "follow"), default="default")
+            item.add_argument("--pricing-policy-id", default="")
+        if command == "set-vm-pricing":
+            item.add_argument("--review-id", required=True)
     nickname = sub.add_parser("set-nickname")
     nickname.add_argument("--vm-id", required=True)
     nickname.add_argument("--nickname", required=True)
@@ -2488,7 +2545,27 @@ def main() -> int:
             value = list_images(args.offering_id, args.project_id)
         elif args.command == "plan":
             value = plan_gpu_vm(args.name, args.offering_id, args.project_id, args.allocation,
-                                args.auto_stop_hours, args.image_id, args.disk_gib)
+                                args.auto_stop_hours, args.image_id, args.disk_gib, args.spot_mode, args.pricing_policy_id)
+        elif args.command in {"pricing-policies", "pricing-platforms", "pricing-create", "pricing-update", "pricing-default", "vm-pricing", "review-start", "plan-vm-pricing", "set-vm-pricing"}:
+            import nebius_pricing as pricing
+            if args.command == "pricing-policies":
+                value = pricing.list_policies(args.project_id, args.platform)
+            elif args.command == "pricing-platforms":
+                value = pricing.list_platforms(args.project_id)
+            elif args.command == "pricing-create":
+                value = pricing.create_policy(args.project_id, args.platform, args.name, args.max_price)
+            elif args.command == "pricing-update":
+                value = pricing.update_policy(args.policy_id, args.name, args.max_price, args.expected_version)
+            elif args.command == "pricing-default":
+                value = pricing.select_default(args.project_id, args.policy_id)
+            elif args.command == "vm-pricing":
+                value = pricing.vm_details(args.vm_id)
+            elif args.command == "review-start":
+                value = pricing.review_start(args.vm_id)
+            elif args.command == "plan-vm-pricing":
+                value = pricing.plan_configuration(args.vm_id, args.spot_mode, args.pricing_policy_id)
+            else:
+                value = pricing.configure_vm(args.vm_id, args.review_id)
         elif args.command == "preflight":
             value = preflight_vm(args.region, args.allocation, args.platform, args.gpu_count, project_id=args.project_id, preset=args.preset)
         elif args.command == "create":
@@ -2506,7 +2583,7 @@ def main() -> int:
         elif args.command == "set-nickname":
             value = set_vm_nickname(args.vm_id, args.nickname)
         elif args.command == "start":
-            value = start_vm(args.vm_id)
+            value = start_vm(args.vm_id, args.pricing_review_id)
         elif args.command == "stop":
             value = stop_vm(args.vm_id, automatic=args.automatic)
         elif args.command == "delete":

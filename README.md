@@ -33,7 +33,7 @@ Out of VRAM in **ComfyUI**? Trying a bigger model with **vLLM** or **Open WebUI*
 
 ## ✨ What you get
 
-- ⚡ **GPU first.** Compare types, regions and availability. Toggle on-demand or preemptible with **P**.
+- ⚡ **GPU first.** Compare types, regions and availability. Start with Spot and a reusable $5/GPU-hour cap. Toggle on-demand or Spot with **P**.
 - ⌨️ **Keyboard-native.** Launch, SSH, start, stop and review deletion. No command strings to memorize.
 - 🔌 **Your app, at localhost.** Saved SSH port forwards reconnect after sleep or network changes.
 - 📊 **Know what's running.** A live VM-count badge, background progress and persistent results.
@@ -52,6 +52,13 @@ information. Use **Boot disk** to adjust storage before reviewing the launch.
 RTX PRO 6000 and L40S variants share one GPU entry. Configurations with the same
 GPU count, CPU and RAM are combined; the plugin picks an available compatible
 variant for your project. Different machine sizes remain separate choices.
+
+In **Settings → Spot pricing policies**, choose a project and GPU platform to
+create policies, edit limits, or set a default. **VM settings → Spot pricing**
+selects a saved policy for a launch and links back to management. The initial
+cap is **USD 5 per GPU-hour**; edited defaults are preserved. If $5 is outside
+the allowed range, choose an allowed value before launching. Current estimates
+and policy limits are shown separately. [Spot pricing guide →](docs/reference.md#spot-pricing-and-reusable-policies)
 
 ## 👋 New to Nebius?
 

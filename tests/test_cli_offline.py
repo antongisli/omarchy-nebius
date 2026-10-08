@@ -21,6 +21,7 @@ class RealCLIParserTests(unittest.TestCase):
             "project": {"project_id": "project-validation"}, "plan_id": "a" * 24,
             "name": "offline-validation", "platform": "gpu-h200-sxm",
             "preset": "1gpu-16vcpu-200gb", "subnet_id": "vpcsubnet-validation", "allocation": allocation,
+            "spot_pricing": {"mode": "follow"},
         }, "computedisk-validation", cloud_init="#cloud-config\n")
 
     def test_real_cli_accepts_both_allocations(self):

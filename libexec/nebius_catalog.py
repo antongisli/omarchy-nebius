@@ -46,13 +46,14 @@ def configurations(offerings, allocation):
                                           int(row.get("vcpu_count") or 0), int(row.get("memory_gib") or 0)))
 
 
-def resolve_variant(offering, project_id, allocation, compatible_ids=None):
+def resolve_variant(offering, project_id, allocation, compatible_ids=None, pricing_platform=None):
     candidates = [row for row in offering.get("variants", [offering])
                   if project_id in {p["project_id"] for p in row.get("projects", [])}
                   and (allocation != "preemptible" or not any(
                       p["project_id"] == project_id and p.get("allowed_for_preemptibles") is False
                       for p in row.get("projects", [])))
                   and core._availability_score(row[allocation])[0] >= 0
+                  and (pricing_platform is None or row["platform"] == pricing_platform)
                   and (compatible_ids is None or row["offering_id"] in compatible_ids)]
     if not candidates:
         raise core.NebiusError("No available configuration matches this project and image. Change image, allocation or project.")

@@ -66,9 +66,9 @@ class NativeTerminalTests(unittest.TestCase):
     def test_real_curses_p_switches_capacity_without_selecting_a_gpu(self):
         for width, height in [(48, 20), (80, 24)]:
             output = self.exercise("allocation", b"Pq", width, height, ready_marker=b"GPU capacity")
-            self.assertIn("RESULT:preemptible", output)
+            self.assertIn("RESULT:on_demand", output)
             self.assertIn("On-demand", output)
-            self.assertIn("Preemptible", output)
+            self.assertIn("Spot", output)
 
     def test_real_curses_escape_and_b_background_a_running_job(self):
         for key in (b"\x1b", b"B"):

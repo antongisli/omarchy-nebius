@@ -38,6 +38,7 @@ Those three checks skip elsewhere. A successful unit-test run is not a live prov
 | `bin/` | Setup, status, uninstall and terminal entry points |
 | `libexec/nebius_ui.py` | Keyboard menus and operation views |
 | `libexec/nebius_core.py` | Preflight, resource lifecycle and persistent outcomes |
+| `libexec/nebius_pricing.py` | Reusable Spot policies, defaults, pricing reviews and calculator estimates |
 | `libexec/nebius_runtime.py` | Shared release version and private/legacy CLI selection |
 | `libexec/nebius_ports.py`, `nebius_ssh.py` | Persistent SSH tunnels and interactive login readiness |
 | `libexec/nebius_jobs.py`, `nebius_job.py` | Concurrent work, durable progress and results |
@@ -47,6 +48,19 @@ Those three checks skip elsewhere. A successful unit-test run is not a live prov
 | `tests/` | Resource-boundary, failure and terminal-layout regressions |
 
 ## Contributing
+
+Pricing tests use public API-shaped synthetic policies and calculator responses.
+They cover default reuse, edited limits, scope, eligibility, shared-policy edits,
+stale pricing and review/submission races. Optional real CLI parser tests use an
+isolated profile, synthetic token and a reserved `.invalid` endpoint:
+
+```bash
+NEBIUS_TEST_PRICING_CLI=/path/to/nebius python3 -m unittest tests.test_pricing_cli
+```
+
+These checks establish parser compatibility, not live pricing-service behavior.
+The Linux network-namespace checks above remain the production VM request
+validation mechanism.
 
 ### Reproduce documentation screenshots
 
