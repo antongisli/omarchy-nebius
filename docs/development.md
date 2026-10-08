@@ -59,7 +59,10 @@ Pricing tests use public API-shaped synthetic policies and calculator responses.
 They cover PAYG-minus-one-cent GPU defaults across regions, migration of the old
 flat default, explicit custom caps, maximum checks, cloud-copy reuse,
 legacy import, unchanged existing VM caps, scope, eligibility, stale pricing and
-review/submission races. Optional real CLI parser tests use an
+review/submission races. Named-copy recovery also covers missing labels and
+uncertain creation results: the full resource must match the project, platform,
+USD cap and any identifying labels that are present. Recovery reuses the policy
+without updating or deleting it. Optional real CLI parser tests use an
 isolated profile, synthetic token and a reserved `.invalid` endpoint:
 
 ```bash

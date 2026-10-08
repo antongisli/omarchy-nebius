@@ -251,12 +251,95 @@ class GlobalPricingTests(unittest.TestCase):
         self.assertIn("Policy: Everywhere", pricing.review_lines(selected))
         self.assertEqual(len(self.writes()), 1)
 
+    def test_named_copy_with_missing_labels_is_reused_without_cloud_changes(self):
+        saved = self.select()
+        first = self.materialize()
+        original_labels = self.resources[0]["metadata"]["labels"]
+        for labels in ({}, {"managed-by": core.MANAGED_BY}, global_pricing._labels(saved),
+                       {key: value for key, value in original_labels.items() if key != global_pricing.VERSION_LABEL}):
+            with self.subTest(labels=labels):
+                self.resources[0]["metadata"]["labels"] = labels
+                before = copy.deepcopy(self.resources)
+                selected = global_pricing.resolve(PROJECT["project_id"], OFFERING["platform"])
+                self.assertEqual(selected["policy"]["id"], first["policy"]["id"])
+                self.assertFalse(selected["create_default"])
+                refreshed = pricing.refresh_terms(selected, PROJECT["project_id"], OFFERING["platform"], create=True)
+                self.assertEqual(refreshed["policy"]["max_price"], "3.125")
+                self.assertEqual(self.resources, before)
+        self.assertEqual(len(self.writes()), 1)
+
+    def test_create_and_retry_work_when_cloud_responses_omit_labels(self):
+        self.select()
+        def omit_labels(args, **kwargs):
+            response = self.cli(args, **kwargs)
+            if args[:3] == ["billing", "pricing-policy", "create"]:
+                self.resources[-1]["metadata"].pop("labels")
+                response["metadata"].pop("labels")
+            return response
+        with patch.object(core, "run_cli", side_effect=omit_labels):
+            selected = global_pricing.resolve(PROJECT["project_id"], OFFERING["platform"])
+            first = pricing.refresh_terms(selected, PROJECT["project_id"], OFFERING["platform"], create=True)
+            # Retrying the original review also reconciles instead of creating again.
+            retry = pricing.refresh_terms(selected, PROJECT["project_id"], OFFERING["platform"], create=True)
+            self.assertEqual(retry["policy"]["id"], first["policy"]["id"])
+            self.assertEqual(self.materialize()["policy"]["id"], first["policy"]["id"])
+        self.assertEqual(len(self.writes()), 1)
+
+    def test_named_copy_recovery_reads_full_resource_and_rejects_conflicts(self):
+        self.select()
+        reviewed = global_pricing.resolve(PROJECT["project_id"], OFFERING["platform"])
+        self.materialize()
+        original = copy.deepcopy(self.resources[0])
+        for field in ("price", "currency", "unknown_currency", "ownership", "policy_id", "revision", "project", "platform"):
+            with self.subTest(field=field):
+                row = copy.deepcopy(original)
+                row["metadata"]["labels"] = {}
+                if field == "price":
+                    row["spec"]["pricing"]["max_price_v1"]["max_price"] = "3.126"
+                elif field in {"currency", "unknown_currency"}:
+                    row["status"]["currency"] = "EUR" if field == "currency" else ""
+                elif field == "project":
+                    row["metadata"]["parent_id"] = "project-other"
+                elif field == "platform":
+                    row["spec"]["compute_instance_spec"]["v1"]["platform"] = "gpu-h100-sxm"
+                else:
+                    key, value = {"ownership": ("managed-by", "another-tool"),
+                                  "policy_id": (global_pricing.ID_LABEL, "spotpolicy-other"),
+                                  "revision": (global_pricing.VERSION_LABEL, "2")}[field]
+                    row["metadata"]["labels"][key] = value
+                self.resources = [row]
+                before = copy.deepcopy(self.resources)
+                # Simulate a list response that has not caught up with Get.
+                def stale_list(args, **kwargs):
+                    response = self.cli(args, **kwargs)
+                    if args[:3] == ["billing", "pricing-policy", "list"]:
+                        listed = copy.deepcopy(original)
+                        listed["metadata"]["labels"] = {}
+                        return {"items": [listed]}
+                    return response
+                with patch.object(core, "run_cli", side_effect=stale_list):
+                    with self.assertRaises(core.NebiusError):
+                        global_pricing.resolve(PROJECT["project_id"], OFFERING["platform"])
+                    with self.assertRaises(core.NebiusError):
+                        pricing.refresh_terms(reviewed, PROJECT["project_id"], OFFERING["platform"], create=True)
+                self.assertEqual(self.resources, before)
+        self.assertEqual(len(self.writes()), 1)
+
+    def test_matching_cap_alone_does_not_select_an_unrelated_policy(self):
+        self.select()
+        self.resources = [fixture.resource("another-policy", "3.125")]
+        self.resources[0]["metadata"]["labels"] = {}
+        selected = global_pricing.resolve(PROJECT["project_id"], OFFERING["platform"])
+        self.assertTrue(selected["create_default"])
+        self.assertFalse(self.writes())
+
     def test_uncertain_create_reconciles_the_completed_copy_without_replay(self):
         self.select()
         selected = global_pricing.resolve(PROJECT["project_id"], OFFERING["platform"])
         def timeout_after_write(args, **kwargs):
             response = self.cli(args, **kwargs)
             if args[:3] == ["billing", "pricing-policy", "create"]:
+                self.resources[-1]["metadata"].pop("labels")
                 raise core.NebiusError("DeadlineExceeded")
             return response
         with patch.object(core, "run_cli", side_effect=timeout_after_write), self.assertRaisesRegex(core.NebiusError, "DeadlineExceeded"):
@@ -265,7 +348,7 @@ class GlobalPricingTests(unittest.TestCase):
         self.assertEqual(recovered["policy"]["max_price"], "3.125")
         self.assertEqual(len(self.writes()), 1)
 
-    def test_duplicate_bindings_and_unrelated_name_collision_block(self):
+    def test_duplicate_bindings_and_conflicting_name_collision_block(self):
         self.select()
         self.materialize()
         duplicate = copy.deepcopy(self.resources[0])
@@ -274,8 +357,8 @@ class GlobalPricingTests(unittest.TestCase):
         with self.assertRaisesRegex(core.NebiusError, "duplicates"):
             global_pricing.resolve(PROJECT["project_id"], OFFERING["platform"])
         self.resources.pop()
-        self.resources[0]["metadata"]["labels"] = {}
-        with self.assertRaisesRegex(core.NebiusError, "already in use"):
+        self.resources[0]["metadata"]["labels"] = {"managed-by": "another-tool"}
+        with self.assertRaisesRegex(core.NebiusError, "identifying labels conflict"):
             global_pricing.resolve(PROJECT["project_id"], OFFERING["platform"])
         self.assertEqual(len(self.writes()), 1)
 

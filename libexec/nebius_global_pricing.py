@@ -192,9 +192,10 @@ def _labels(row):
 
 
 def _verify_copy(row, saved):
-    if (row["max_price"] != saved["max_price"] or row["currency"] != saved["currency"] or
-            row["labels"].get("managed-by") != core.MANAGED_BY or
-            any(row["labels"].get(key) != value for key, value in _labels(saved).items())):
+    if not pricing.matches_policy_identity(row, _cloud_name(saved, row["platform"]), _labels(saved)):
+        raise core.NebiusError("The cloud policy's identifying labels conflict with your saved cap. "
+                              "Review it in Nebius console or select another policy")
+    if row["max_price"] != saved["max_price"] or row["currency"] != saved["currency"]:
         raise core.NebiusError("The cloud policy differs from your saved cap. Review it in Nebius console or select another policy")
 
 
@@ -211,16 +212,18 @@ def resolve(project_id, platform, mode="default", policy_id=""):
             raise core.NebiusError("No default is available for this GPU. Select a saved cap or Follow spot price")
     saved = _find(value, policy_id)
     _check_maximum(saved, platform)
-    result = pricing.list_policies(project_id, platform)
-    matches = [row for row in result["policies"] if all(row["labels"].get(k) == v for k, v in _labels(saved).items())]
+    result = pricing.list_policies(project_id)
+    matches = [row for row in result["policies"] if row["name"] == _cloud_name(saved, platform) or
+               (row["platform"] == platform and all(row["labels"].get(k) == v for k, v in _labels(saved).items()))]
     if len(matches) > 1:
         raise core.NebiusError("Several cloud policies match this cap. Resolve the duplicates in Nebius console before launching")
     row = matches[0] if matches else None
     if row:
+        # A previous create may have completed without returning its labels.
+        # Read the full resource and verify its scope, identity and exact cap.
+        row = pricing.get_policy(row["id"], project_id, platform)
         _verify_copy(row, saved)
     else:
-        if any(p["name"] == _cloud_name(saved, platform) for p in result["policies"]):
-            raise core.NebiusError("The cloud policy name is already in use. Select another global policy")
         row = {"id": "", "name": saved["name"], "project_id": project_id, "platform": platform,
                "max_price": saved["max_price"], "currency": saved["currency"], "resource_version": "",
                "state": "PLANNED", "scheduling_state": "PENDING_CREATION", "running_vm_count": 0}

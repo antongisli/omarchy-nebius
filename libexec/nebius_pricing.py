@@ -78,6 +78,18 @@ def policy_row(resource):
             "labels": metadata.get("labels") or {}}
 
 
+def matches_policy_identity(row, name, labels):
+    """Allow absent labels on an exact name; never ignore conflicting labels.
+
+    Reuse still requires scope and price checks. This does not establish
+    ownership for updating or deleting the policy.
+    """
+    expected = {**labels, "managed-by": core.MANAGED_BY}
+    actual = row["labels"]
+    return (all(actual[key] == value for key, value in expected.items() if key in actual) and
+            (row["name"] == name or all(actual.get(key) == value for key, value in expected.items())))
+
+
 def get_policy(policy_id, project_id=None, platform=None):
     require_support()
     if not re.fullmatch(r"pricingpolicy-[A-Za-z0-9_-]+", str(policy_id)):
@@ -229,9 +241,9 @@ def create_policy(project_id, platform, name, max_price, *, default=False, label
         existing = list_policies(project_id, platform)["policies"]
         found = (_managed_default(existing) if default else None) or next((p for p in existing if p["name"] == name), None)
         if found:
+            found = get_policy(found["id"], project_id, platform)
             if (found["max_price"] != maximum or found["currency"] != "USD" or
-                    (labels and (found["labels"].get("managed-by") != core.MANAGED_BY or
-                                 any(found["labels"].get(k) != v for k, v in labels.items()))) or
+                    (labels and not matches_policy_identity(found, name, labels)) or
                     (default and (found["labels"].get("pricing-default") != "true" or
                                   found["labels"].get("managed-by") != core.MANAGED_BY))):
                 raise core.NebiusError("That policy already exists with different terms. Review and select it instead")
@@ -249,7 +261,8 @@ def create_policy(project_id, platform, name, max_price, *, default=False, label
             raise _policy_error(error)
         row = policy_row(core.run_cli(["billing", "pricing-policy", "get-by-name", "--parent-id", project_id,
                                       "--name", name, "--format", "json"]))
-        if row["platform"] != platform or row["max_price"] != maximum or row["currency"] != "USD":
+        if (row["project_id"] != project_id or row["platform"] != platform or
+                row["max_price"] != maximum or row["currency"] != "USD"):
             raise core.NebiusError("Created policy terms differ from the reviewed USD limit. Review the policy before launching")
         return row
 
