@@ -268,13 +268,15 @@ class GlobalPricingTests(unittest.TestCase):
                 self.assertEqual(self.resources, before)
         self.assertEqual(len(self.writes()), 1)
 
-    def test_create_and_retry_work_when_cloud_responses_omit_labels(self):
+    def test_create_and_retry_work_with_missing_labels_and_lowercase_currency(self):
         self.select()
         def omit_labels(args, **kwargs):
             response = self.cli(args, **kwargs)
             if args[:3] == ["billing", "pricing-policy", "create"]:
                 self.resources[-1]["metadata"].pop("labels")
                 response["metadata"].pop("labels")
+                self.resources[-1]["status"]["currency"] = "usd"
+                response["status"]["currency"] = "usd"
             return response
         with patch.object(core, "run_cli", side_effect=omit_labels):
             selected = global_pricing.resolve(PROJECT["project_id"], OFFERING["platform"])
@@ -283,6 +285,19 @@ class GlobalPricingTests(unittest.TestCase):
             retry = pricing.refresh_terms(selected, PROJECT["project_id"], OFFERING["platform"], create=True)
             self.assertEqual(retry["policy"]["id"], first["policy"]["id"])
             self.assertEqual(self.materialize()["policy"]["id"], first["policy"]["id"])
+        self.assertEqual(len(self.writes()), 1)
+
+    def test_currency_case_changes_do_not_invalidate_reviewed_cap(self):
+        self.select()
+        reviewed = self.materialize()
+        for currency in ("usd", "Usd", "uSD", " USD "):
+            with self.subTest(currency=currency):
+                self.resources[0]["status"]["currency"] = currency
+                selected = global_pricing.resolve(PROJECT["project_id"], OFFERING["platform"])
+                refreshed = pricing.refresh_terms(reviewed, PROJECT["project_id"], OFFERING["platform"], create=True)
+                self.assertEqual(selected["policy"]["currency"], "USD")
+                self.assertEqual(pricing.terms(refreshed), pricing.terms(reviewed))
+                self.assertEqual(pricing.check(refreshed)["state"], "ok")
         self.assertEqual(len(self.writes()), 1)
 
     def test_named_copy_recovery_reads_full_resource_and_rejects_conflicts(self):
@@ -297,7 +312,7 @@ class GlobalPricingTests(unittest.TestCase):
                 if field == "price":
                     row["spec"]["pricing"]["max_price_v1"]["max_price"] = "3.126"
                 elif field in {"currency", "unknown_currency"}:
-                    row["status"]["currency"] = "EUR" if field == "currency" else ""
+                    row["status"]["currency"] = "eur" if field == "currency" else ""
                 elif field == "project":
                     row["metadata"]["parent_id"] = "project-other"
                 elif field == "platform":

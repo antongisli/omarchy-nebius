@@ -287,7 +287,8 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(pricing.resolve(PROJECT["project_id"], OFFERING["platform"])["policy"]["id"], "pricingpolicy-example")
 
     def test_unknown_currency_and_updating_policy_block_scheduling(self):
-        for field, value in [("currency", ""), ("state", "STATE_UPDATING")]:
+        for field, value in [("currency", ""), ("currency", "  "), ("currency", None),
+                             ("state", "STATE_UPDATING")]:
             self.resources = [resource()]
             self.resources[0]["status"][field] = value
             self.assertFalse(self.plan(spot_mode="policy", pricing_policy_id="pricingpolicy-example")["preflight"]["ready"])

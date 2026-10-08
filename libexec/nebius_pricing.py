@@ -63,6 +63,8 @@ def _scope(project_id):
 
 def policy_row(resource):
     metadata, spec, status = (resource.get(k, {}) for k in ("metadata", "spec", "status"))
+    currency = status.get("currency")
+    currency = currency.strip().upper() if isinstance(currency, str) else ""
     try:
         maximum = amount(spec["pricing"]["max_price_v1"]["max_price"])
         platform = spec["compute_instance_spec"]["v1"]["platform"]
@@ -70,7 +72,7 @@ def policy_row(resource):
         raise core.NebiusError("Nebius returned an unsupported pricing policy") from error
     return {"id": metadata.get("id", ""), "name": metadata.get("name", ""),
             "project_id": metadata.get("parent_id", ""), "platform": platform,
-            "max_price": maximum, "currency": status.get("currency") or "UNKNOWN",
+            "max_price": maximum, "currency": currency or "UNKNOWN",
             "resource_version": str(metadata.get("resource_version", "")),
             "state": status.get("state", "STATE_UNSPECIFIED"),
             "scheduling_state": status.get("scheduling_state", "SCHEDULING_STATE_UNSPECIFIED"),
