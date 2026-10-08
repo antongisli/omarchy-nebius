@@ -182,7 +182,7 @@ def check(pricing):
     row = pricing["policy"]
     if pricing.get("create_default"):
         return {"name": "Spot pricing", "state": "ok", "message":
-                "Create reusable USD 5.000/GPU-hour default on confirmation; Nebius must accept its range before any disk or VM is allocated"}
+                f"Apply {row['currency']} {row['max_price']}/GPU-hour cap on confirmation; Nebius must accept its range before any disk or VM is allocated"}
     allowed = row["state"] == "STATE_ACTIVE" and row["scheduling_state"] == "SCHEDULING_STATE_ALLOWED"
     if row["currency"] == "UNKNOWN":
         allowed = False
@@ -210,7 +210,7 @@ def _policy_error(error):
     return error
 
 
-def create_policy(project_id, platform, name, max_price, *, default=False):
+def create_policy(project_id, platform, name, max_price, *, default=False, labels=None):
     _scope(project_id)
     require_support()
     maximum = amount(max_price)
@@ -222,11 +222,13 @@ def create_policy(project_id, platform, name, max_price, *, default=False):
         found = (_managed_default(existing) if default else None) or next((p for p in existing if p["name"] == name), None)
         if found:
             if (found["max_price"] != maximum or found["currency"] != "USD" or
+                    (labels and (found["labels"].get("managed-by") != core.MANAGED_BY or
+                                 any(found["labels"].get(k) != v for k, v in labels.items()))) or
                     (default and (found["labels"].get("pricing-default") != "true" or
                                   found["labels"].get("managed-by") != core.MANAGED_BY))):
                 raise core.NebiusError("That policy already exists with different terms. Review and select it instead")
             return found
-        labels = {"managed-by": core.MANAGED_BY}
+        labels = {**(labels or {}), "managed-by": core.MANAGED_BY}
         if default:
             labels["pricing-default"] = "true"
         request = {"metadata": {"parent_id": project_id, "name": name, "labels": labels},
@@ -266,6 +268,9 @@ def update_policy(policy_id, name, max_price, expected_version):
 
 
 def refresh_terms(pricing, project_id, platform, *, create=False):
+    if pricing.get("global_policy"):
+        import nebius_global_pricing as global_pricing
+        return global_pricing.refresh_terms(pricing, project_id, platform, create=create)
     if pricing["mode"] == "follow":
         require_support()
         return pricing
@@ -313,6 +318,9 @@ def vm_details(vm_id):
         # Keep policy replacement available even after its old policy was deleted.
         return {"vm": vm, "pricing": choice, "ready": False, "pricing_error": str(error),
                 "check": {"name": "Spot pricing", "state": "blocked", "message": str(error)}}
+    if pricing.get("policy"):
+        import nebius_global_pricing as global_pricing
+        pricing["policy"]["display_name"] = global_pricing.display_name(pricing["policy"])
     result = {"vm": vm, "pricing": pricing, "ready": check(pricing)["state"] == "ok", "check": check(pricing)}
     count = re.match(r"^(\d+)gpu(?:-|$)", str(vm.get("preset", "")))
     result["gpu_count"] = int(count[1]) if count else None
@@ -369,7 +377,8 @@ def plan_configuration(vm_id, mode="default", policy_id=""):
     core._require_direct_lifecycle(vm)
     if vm["state"] != "stopped" or not instance.get("spec", {}).get("preemptible"):
         raise core.NebiusError("Pricing can only be changed on a stopped Spot VM")
-    pricing = resolve(vm["project_id"], vm["platform"], mode, policy_id)
+    import nebius_global_pricing as global_pricing
+    pricing = global_pricing.resolve(vm["project_id"], vm["platform"], mode, policy_id)
     review_id = secrets.token_urlsafe(18)
     result = {"schema": "nebius.omarchy-pricing-change/v1", "vm_id": vm_id,
               "resource_version": str(instance["metadata"].get("resource_version", "")), "pricing": pricing,
@@ -398,7 +407,10 @@ def configure_vm(vm_id, review_id):
         if not valid:
             raise core.NebiusError("The VM or pricing review changed. Review the pricing change again")
         pricing = saved["pricing"]
-        if pricing.get("create_default"):
+        if pricing.get("global_policy"):
+            import nebius_global_pricing as global_pricing
+            pricing = global_pricing.refresh_terms(pricing, vm["project_id"], vm["platform"], create=True, require_allowed=False)
+        elif pricing.get("create_default"):
             pricing = refresh_terms(pricing, vm["project_id"], vm["platform"], create=True)
         elif pricing["mode"] == "policy":
             row = get_policy(pricing["policy"]["id"], vm["project_id"], vm["platform"])
@@ -470,7 +482,7 @@ def review_lines(pricing, quote=None, gpu_count=None):
     if pricing["mode"] == "follow":
         lines = ["Spot pricing: follow current price; no user-set maximum."]
     else:
-        lines = [f"Policy: {row['name']}" + (" (created on confirmation)" if pricing.get("create_default") else ""),
+        lines = [f"Policy: {row.get('display_name') or row['name']}",
                  f"Maximum: {row['currency']} {row['max_price']}/GPU-hour" + (f" · {gpu_count} GPU(s)" if gpu_count else ""),
                  "The limit applies per GPU, not to total spend. Storage and other charges are separate."]
         if gpu_count:

@@ -125,8 +125,10 @@ memory and CPU architecture. Availability shows the best reported pool, not a
 sum across potentially overlapping capacity advice. Actual platform, preset and
 fabric IDs are retained for placement, live preflight, pricing and API requests.
 After project/image selection, the plugin picks a matching variant by capacity,
-then the available price estimate on ties. Spot placement never uses a fixed discount; an explicitly selected policy constrains the exact platform. Known project-level preemptible restrictions are
-respected. A failure after submission never triggers a second automatic launch.
+then the available price estimate on ties. Spot placement never uses a fixed
+discount. Global caps work across equivalent platform variants. Known
+project-level preemptible restrictions are respected. A failure after submission
+never triggers a second automatic launch.
 
 ## Default VM workflow
 
@@ -160,39 +162,46 @@ Spot estimates use the public Nebius billing calculator. On-demand estimates use
 
 ## Spot pricing and reusable policies
 
-New launch flows start with **Spot (preemptible)**. Each project and exact GPU
-platform gets a reusable default policy with a **USD 5.000 per GPU-hour** limit.
-The policy is created lazily during confirmed VM creation, before a disk or VM
-is allocated. Opening the picker or preparing a plan creates no cloud resources.
-Later launches reuse the policy, including any edits or renames. A renamed
-plugin default is discoverable from another installation through its labels.
+New launch flows start with **Spot (preemptible)** and an initial
+**USD 5.000 per GPU-hour** cap. The plugin's named policies and default are
+global: the same cap works with any GPU type, in every region and personal
+project. Policies are saved locally in this plugin installation.
 
-Open **Settings → Spot pricing policies**, choose a project, then choose its
-exact GPU platform. This works without an existing VM or available GPU capacity.
-Saved policies remain accessible even if their platform is no longer offered.
+Open **Settings → Spot pricing policies** to manage the caps directly. There
+is no project, region or GPU platform picker. Settings works without a project,
+existing VM, available GPU capacity or cloud connection.
 
-- **Create a policy** saves a named limit for reuse across VMs. A matching named
-  policy is reused on retry; uncertain writes are never automatically replayed.
+- **Create a policy** saves a name and USD per-GPU-hour limit locally.
 - Select a saved policy to **Edit policy**, **Set as default**, or view its details.
-  Defaults are remembered locally per project and platform. A deleted or
-  inaccessible saved default requires another selection.
-- The policy list shows the current default, limits, running VM counts and
-  scheduling eligibility. Browsing Settings creates no cloud resources.
+  The default applies to future Spot launches across all GPUs and regions.
+- **Import an existing cap** copies the reviewed limit of an existing USD cloud
+  policy into a global policy. It needs cloud access. Choose **Set as default**
+  afterward to use it automatically. Older defaults require this explicit
+  choice before a default launch; the plugin never silently replaces them.
+- Browsing, saving and editing global policies creates no cloud resources.
 
 In **VM settings → Spot pricing**, select a saved policy for this launch:
 
-- **Use saved default** uses the saved policy for this project/platform, or finds
-  the plugin's default policy. Only a missing default starts at USD 5.000.
+- **Use saved default** uses the same saved global cap everywhere.
 - **Follow spot price** explicitly accepts changing prices without a user-set
   maximum. This is never an automatic fallback.
-- **Manage policies in Settings** opens management for the current project and
-  platform, then returns to the picker with the updated policies.
+- **Manage policies in Settings** opens the global list, then returns to the
+  picker with the updated policies. Changing placement keeps your selected cap.
 
-The service rejects limits outside its allowed range. The plugin keeps the
-requested USD 5.000 default exactly: if rejected, it asks for an allowed value
-without allocating a disk or VM. Check **Billing → Pricing** in the Nebius
-console, then create a suitable policy in Settings and select it. Selecting another project or GPU
-platform revalidates policy compatibility, including grouped GPU variants.
+Nebius cloud policies still belong to a project and exact GPU platform. On a
+confirmed launch the plugin creates or reuses the matching cloud policy with
+the exact reviewed cap, before allocating a disk or VM. Planning is read-only.
+Each saved revision has separate cloud copies, so edits do not alter existing
+VMs. Retries reconcile matching copies; uncertain writes are not replayed
+automatically. Global policy names and defaults are local and do not sync
+between installations.
+
+The service rejects limits outside its allowed range for the selected GPU and
+location. The plugin keeps your requested cap exactly: if rejected, it asks for
+an allowed value without allocating a disk or VM. Check **Billing → Pricing**
+in the Nebius console, then select a suitable cap or another configuration.
+One global cap does not imply equal market prices or availability everywhere.
+Equivalent GPU platform variants can use the same cap.
 
 Policy limits apply **per GPU-hour**, not to the whole VM or accumulated spending.
 A multi-GPU VM multiplies that rate by its GPU count. Storage and other charges
@@ -203,11 +212,13 @@ failed refreshes show a saved/stale estimate or explicitly unavailable pricing.
 The API does not expose a standalone spot-price range feed, so the plugin links
 to the console instead of inferring a range or using a fixed preemptible discount.
 
-Policies are shared resources. Limit edits affect all VMs referencing a policy
-and require zero running VMs under it. The editor shows the running count, uses
-the reviewed resource version, and never stops VMs to make an edit possible.
-Renaming preserves the limit. Create a separate policy if other VMs must stay
-running. Policies remain in the project when a VM or the plugin is removed.
+Global cap edits apply to future launches and selections. Existing VMs keep
+their reviewed cap, including after a restart. To apply an edited cap to an
+existing VM, stop it and select the policy again in **VM actions → Spot pricing**.
+Plans become invalid if the selected global cap or cloud policy changes after
+review. The plugin never stops VMs to edit a cap. Cloud policy copies remain
+when a VM or the plugin is removed; removing local plugin state removes the
+saved global caps and default.
 
 **VM actions → Spot pricing** shows the current policy and eligibility. On a
 stopped Spot VM it also offers a reviewed change of policy or pricing mode.
@@ -225,6 +236,8 @@ cap increase is installed.
 Agent tools expose the same workflow: `list_pricing_policies`,
 `create_pricing_policy`, `update_pricing_policy`, `set_default_pricing_policy`,
 `inspect_vm_pricing`, `review_vm_start`, `plan_vm_pricing`, and `apply_vm_pricing`.
+Global policy tools need no project, region or platform. Use
+`list_existing_pricing_policies` and `import_pricing_policy` to reuse older caps.
 `plan_gpu_vm` accepts `spot_mode` (`default`, `policy`, `follow`) and
 `pricing_policy_id`. A Spot start requires the `pricing_review_id` returned by
 `review_vm_start`. Old launch plans without pricing terms require fresh review.

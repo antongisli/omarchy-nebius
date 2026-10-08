@@ -85,16 +85,15 @@ def render(width=80, height=30, allocation="on_demand", surface="capacity"):
                      patch.object(app, "agent_status", return_value={"installed": False, "ready": False}):
                     app.preferences()
             elif surface in {"spot-pricing", "spot-policies", "spot-review"}:
-                policy = {"id": "pricingpolicy-example", "name": "development-gpus", "project_id": "project-example",
-                          "platform": "gpu-h200-sxm", "max_price": "5.000", "currency": "USD", "resource_version": "1",
-                          "running_vm_count": 2, "state": "STATE_ACTIVE", "scheduling_state": "SCHEDULING_STATE_ALLOWED"}
+                policy = {"id": "spotpolicy-example", "name": "Development GPUs",
+                          "max_price": "5.000", "currency": "USD", "resource_version": "1"}
                 if surface in {"spot-pricing", "spot-policies"}:
                     with patch.object(app, "read", return_value={"policies": [policy], "default_policy_id": policy["id"],
-                            "range_note": "Allowed ranges: Nebius console → Billing → Pricing."}):
+                            "range_note": "Your cap is checked at launch. Storage and other charges are separate."}):
                         if surface == "spot-policies":
-                            app.manage_spot_policies("project-example", "gpu-h200-sxm", "development")
+                            app.manage_spot_policies()
                         else:
-                            app.choose_spot_pricing("project-example", "gpu-h200-sxm")
+                            app.choose_spot_pricing()
                 else:
                     quote = {"state": "current", "compute_per_hour": "20.000", "storage_per_hour": "0.020",
                              "per_gpu_hour": "2.500", "checked_at": "2026-01-01T12:00:00+00:00"}

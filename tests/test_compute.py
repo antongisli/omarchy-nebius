@@ -14,6 +14,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "libexec"))
 import nebius_core as core
 import nebius_pricing as pricing
+import nebius_global_pricing as global_pricing
 import nebius_agent_mcp as mcp
 
 
@@ -48,7 +49,7 @@ class ComputeTests(unittest.TestCase):
     def plan(self, allocation="on_demand", offering=None):
         with patch.object(core, "gpu_capacity", return_value={"offerings": [offering or copy.deepcopy(OFFERING)]}), \
              patch.object(core, "preflight_vm", return_value=GOOD), \
-             patch.object(pricing, "resolve", return_value={"mode": "follow", "policy": None, "create_default": False}), \
+             patch.object(global_pricing, "resolve", return_value={"mode": "follow", "policy": None, "create_default": False}), \
              patch.object(pricing, "estimate", return_value={"state": "unavailable"}):
             return core.plan_gpu_vm("training-box", "choice", "project-personal", allocation, 0)
 

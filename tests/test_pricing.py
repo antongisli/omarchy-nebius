@@ -10,6 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "libexec"))
 import nebius_core as core
 import nebius_pricing as pricing
+import nebius_global_pricing as global_pricing
 import nebius_catalog as catalog
 import nebius_agent_mcp as mcp
 import nebius_ui as ui
@@ -32,6 +33,7 @@ class PricingTests(unittest.TestCase):
     def setUp(self):
         compute_tests.ComputeTests.setUp(self)
         self.resources = []
+        self.projects = [PROJECT]
         self.calls = []
         self.create_error = None
         self.quote_error = None
@@ -40,7 +42,7 @@ class PricingTests(unittest.TestCase):
         self.platform_error = None
         for target, name, kwargs in [
             (pricing, "require_support", {"return_value": None}),
-            (core, "sync_personal_projects", {"return_value": {"projects": [PROJECT]}}),
+            (core, "sync_personal_projects", {"side_effect": lambda: {"projects": self.projects}}),
             (core, "run_cli", {"side_effect": self.cli}),
             (core, "gpu_capacity", {"return_value": {"offerings": [OFFERING]}}),
             (core, "preflight_vm", {"return_value": GOOD}),
@@ -64,12 +66,14 @@ class PricingTests(unittest.TestCase):
             raise AssertionError("Unexpected cloud call: " + repr(args))
         action = args[2]
         if action == "list":
-            return {"items": copy.deepcopy(self.resources)}
+            parent = args[args.index("--parent-id") + 1]
+            return {"items": copy.deepcopy([r for r in self.resources if r["metadata"]["parent_id"] == parent])}
         if action in {"get", "get-by-name"}:
             field = "id" if action == "get" else "name"
             value = args[args.index("--" + field) + 1]
             for row in self.resources:
-                if row["metadata"][field] == value:
+                if row["metadata"][field] == value and (action == "get" or
+                        row["metadata"]["parent_id"] == args[args.index("--parent-id") + 1]):
                     return copy.deepcopy(row)
             raise core.NebiusError("NotFound: policy no longer exists")
         if action == "create":
@@ -77,7 +81,9 @@ class PricingTests(unittest.TestCase):
                 raise core.NebiusError(self.create_error)
             request = json.loads(args[3])
             row = resource(request["metadata"]["name"], request["spec"]["pricing"]["max_price_v1"]["max_price"],
+                           identifier="pricingpolicy-example" + (str(len(self.resources)) if self.resources else ""),
                            platform=request["spec"]["compute_instance_spec"]["v1"]["platform"])
+            row["metadata"]["parent_id"] = request["metadata"]["parent_id"]
             row["metadata"]["labels"] = request["metadata"]["labels"]
             self.resources.append(row)
             return copy.deepcopy(row)
@@ -102,9 +108,12 @@ class PricingTests(unittest.TestCase):
         if command == "pricing-platforms":
             return pricing.list_platforms(args[args.index("--project-id") + 1])
         if command == "pricing-policies":
-            return pricing.list_policies(args[args.index("--project-id") + 1], args[args.index("--platform") + 1])
+            self.assertEqual(args, ())
+            return global_pricing.list_policies()
         if command == "pricing-default":
-            return pricing.select_default(args[args.index("--project-id") + 1], args[args.index("--policy-id") + 1])
+            return global_pricing.select_default(args[args.index("--policy-id") + 1])
+        if command == "pricing-existing":
+            return global_pricing.existing_policies()
         raise AssertionError("Unexpected settings read: " + command)
 
     def test_default_plan_is_spot_five_dollars_and_read_only(self):
@@ -125,22 +134,22 @@ class PricingTests(unittest.TestCase):
 
     def test_edited_default_is_preserved(self):
         self.resources = [resource(maximum="3.125")]
-        plan = self.plan()
-        self.assertEqual(plan["spot_pricing"]["policy"]["max_price"], "3.125")
+        selected = pricing.resolve(PROJECT["project_id"], OFFERING["platform"])
+        self.assertEqual(selected["policy"]["max_price"], "3.125")
         self.assertFalse(self.writes())
 
     def test_renamed_default_is_reused_without_local_preferences(self):
         self.resources = [resource("my-renamed-default", "3.000")]
-        plan = self.plan()
-        self.assertEqual(plan["spot_pricing"]["policy"]["name"], "my-renamed-default")
-        self.assertEqual(plan["spot_pricing"]["policy"]["max_price"], "3.000")
-        self.assertFalse(plan["spot_pricing"]["create_default"])
+        selected = pricing.resolve(PROJECT["project_id"], OFFERING["platform"])
+        self.assertEqual(selected["policy"]["name"], "my-renamed-default")
+        self.assertEqual(selected["policy"]["max_price"], "3.000")
+        self.assertFalse(selected["create_default"])
         self.assertFalse(self.writes())
 
     def test_selected_default_is_remembered_by_project_and_platform(self):
         self.resources = [resource(), resource("custom", "2.250", "pricingpolicy-custom")]
         pricing.select_default(PROJECT["project_id"], "pricingpolicy-custom")
-        self.assertEqual(self.plan()["spot_pricing"]["policy"]["id"], "pricingpolicy-custom")
+        self.assertEqual(pricing.resolve(PROJECT["project_id"], OFFERING["platform"])["policy"]["id"], "pricingpolicy-custom")
         other = pricing.resolve(PROJECT["project_id"], "gpu-l40s-a")
         self.assertTrue(other["create_default"])
         self.assertEqual(other["policy"]["max_price"], "5.000")
@@ -150,7 +159,7 @@ class PricingTests(unittest.TestCase):
         pricing.select_default(PROJECT["project_id"], "pricingpolicy-example")
         self.resources = []
         with self.assertRaisesRegex(core.NebiusError, "NotFound"):
-            self.plan()
+            pricing.resolve(PROJECT["project_id"], OFFERING["platform"])
         self.assertFalse(self.writes())
 
     def test_foreign_project_and_platform_are_rejected(self):
@@ -164,7 +173,7 @@ class PricingTests(unittest.TestCase):
         self.resources = [resource()]
         self.resources[0]["metadata"]["labels"] = {}
         with self.assertRaisesRegex(core.NebiusError, "already in use"):
-            self.plan()
+            pricing.resolve(PROJECT["project_id"], OFFERING["platform"])
 
     def test_limit_validation_is_decimal_and_rejects_invalid_values(self):
         self.assertEqual(pricing.amount("5"), "5.000")
@@ -211,7 +220,7 @@ class PricingTests(unittest.TestCase):
     def test_blocked_policy_overrides_capacity_without_mutation(self):
         self.resources = [resource()]
         self.resources[0]["status"]["scheduling_state"] = "SCHEDULING_STATE_BLOCKED"
-        plan = self.plan()
+        plan = self.plan(spot_mode="policy", pricing_policy_id="pricingpolicy-example")
         self.assertFalse(plan["preflight"]["ready"])
         with patch.object(core, "ensure_ssh_key") as key:
             with self.assertRaisesRegex(core.NebiusError, "blocked"):
@@ -221,7 +230,7 @@ class PricingTests(unittest.TestCase):
 
     def test_policy_changes_after_review_require_new_plan(self):
         self.resources = [resource()]
-        plan = self.plan()
+        plan = self.plan(spot_mode="policy", pricing_policy_id="pricingpolicy-example")
         self.resources[0]["spec"]["pricing"]["max_price_v1"]["max_price"] = "6.000"
         self.resources[0]["metadata"]["resource_version"] = "2"
         with patch.object(core, "ensure_ssh_key") as key, self.assertRaisesRegex(core.NebiusError, "changed since review"):
@@ -248,13 +257,13 @@ class PricingTests(unittest.TestCase):
         self.resources = [resource()]
         result = pricing.update_policy("pricingpolicy-example", "new-name", "3.125", "1")
         self.assertEqual(result["max_price"], "3.125")
-        self.assertEqual(self.plan()["spot_pricing"]["policy"]["id"], "pricingpolicy-example")
+        self.assertEqual(pricing.resolve(PROJECT["project_id"], OFFERING["platform"])["policy"]["id"], "pricingpolicy-example")
 
     def test_unknown_currency_and_updating_policy_block_scheduling(self):
         for field, value in [("currency", ""), ("state", "STATE_UPDATING")]:
             self.resources = [resource()]
             self.resources[0]["status"][field] = value
-            self.assertFalse(self.plan()["preflight"]["ready"])
+            self.assertFalse(self.plan(spot_mode="policy", pricing_policy_id="pricingpolicy-example")["preflight"]["ready"])
 
     def test_on_demand_does_not_resolve_or_create_policies(self):
         plan = self.plan(allocation="on_demand")
@@ -265,7 +274,7 @@ class PricingTests(unittest.TestCase):
 
     def test_policy_limit_and_calculator_price_are_separate(self):
         self.resources = [resource()]
-        plan = self.plan()
+        plan = self.plan(spot_mode="policy", pricing_policy_id="pricingpolicy-example")
         self.assertEqual(plan["spot_pricing"]["policy"]["max_price"], "5.000")
         self.assertEqual(plan["price_estimate"]["compute_per_hour"], "2.500")
         payload = json.loads(next(c[4] for c in self.calls if "calculator" in c))
@@ -320,7 +329,8 @@ class PricingTests(unittest.TestCase):
         self.resources = [resource()]
         vm = {"id": "computeinstance-example", "project_id": PROJECT["project_id"], "platform": OFFERING["platform"], "state": "stopped"}
         instance = {"spec": {"preemptible": {"on_preemption": "STOP"}, "spot_pricing_policy": {"id": "pricingpolicy-example"}}}
-        with patch.object(pricing, "vm_details", return_value={"ready": True, "vm": vm, "pricing": self.plan()["spot_pricing"]}):
+        selected = pricing.resolve(vm["project_id"], vm["platform"], "policy", "pricingpolicy-example")
+        with patch.object(pricing, "vm_details", return_value={"ready": True, "vm": vm, "pricing": selected}):
             review = pricing.review_start(vm["id"])
         pricing.validate_start(instance, vm, review["pricing_review_id"])
         self.resources[0]["status"]["scheduling_state"] = "SCHEDULING_STATE_BLOCKED"
@@ -387,19 +397,20 @@ class PricingTests(unittest.TestCase):
         self.assertIn("review", submit.call_args.args[0])
 
     def test_policy_picker_is_keyboard_operable_at_narrow_width(self):
-        row = pricing.policy_row(resource())
+        row = global_pricing.list_policies()["policies"][0]
         application, screen = app(["2"], width=48, height=20)
         with patch.object(application, "read", return_value={"policies": [row], "default_policy_id": "", "range_note": "Allowed range: console"}), \
              patch.object(application, "mutate") as mutate:
-            choice = application.choose_spot_pricing(PROJECT["project_id"], OFFERING["platform"])
+            choice = application.choose_spot_pricing()
         self.assertEqual(choice["policy_id"], row["id"])
+        self.assertIsNone(choice["platform"])
         mutate.assert_not_called()
 
     def test_settings_is_reachable_and_browsing_requires_no_capacity_or_vm(self):
         self.resources = [resource()]
         for width, height in [(48, 20), (80, 30)]:
-            # Settings -> policies -> project -> platform -> back through all menus.
-            application, screen = app(["p", "\n", "\n", "\x1b", "\x1b", "\x1b", "\x1b"], width, height)
+            # Settings -> global policies -> back; no project or platform menus.
+            application, screen = app(["p", "\x1b", "\x1b"], width, height)
             with patch.object(application, "read", side_effect=self.ui_read), \
                  patch.object(application, "agent_status", return_value={"installed": False, "ready": False}), \
                  patch.object(application, "mutate") as mutate, \
@@ -410,56 +421,57 @@ class PricingTests(unittest.TestCase):
             self.assertIn("Spot pricing policies", "\n".join(screen.frames))
             self.assertIn("Settings", screen.frames[-1])
             self.assertNotIn("[ On-demand | Spot ]", screen.frames[0])
+            self.assertNotIn("Choose a project", "\n".join(screen.frames))
+            self.assertNotIn("Choose the GPU platform", "\n".join(screen.frames))
             mutate.assert_not_called()
         self.assertFalse(self.writes())
 
     def test_settings_default_is_reused_by_the_launch_picker_and_plan(self):
-        self.resources = [resource("my-saved-policy", "3.125")]
-        self.resources[0]["metadata"]["labels"] = {}
-        application, screen = app(["1", "2", "\x1b", "\n"], 80, 30)
+        saved = global_pricing.create_policy("my-saved-policy", "3.125")
+        application, screen = app(["2", "2", "\x1b", "\n"], 80, 30)
         with patch.object(application, "read", side_effect=self.ui_read):
             with self.assertRaises(ui.Back):
-                application.manage_spot_policies(PROJECT["project_id"], OFFERING["platform"])
-            selection = application.choose_spot_pricing(PROJECT["project_id"], OFFERING["platform"])
+                application.manage_spot_policies()
+            selection = application.choose_spot_pricing()
         self.assertEqual(selection["mode"], "default")
         self.assertIn("3.125/GPU-hour", screen.frames[-1])
-        self.assertEqual(pricing.list_policies(PROJECT["project_id"], OFFERING["platform"])["default_policy_id"], "pricingpolicy-example")
+        self.assertEqual(global_pricing.list_policies()["default_policy_id"], saved["id"])
         self.assertEqual(self.plan()["spot_pricing"]["policy"]["max_price"], "3.125")
         self.assertFalse(self.writes())
 
     def test_launch_can_open_management_and_return_without_changing_its_choice(self):
         application, _ = app(["e", "\x1b", "\n"], 80, 30)
         with patch.object(application, "read", side_effect=self.ui_read), patch.object(application, "mutate") as mutate:
-            selection = application.choose_spot_pricing(PROJECT["project_id"], OFFERING["platform"])
+            selection = application.choose_spot_pricing()
         self.assertEqual(selection["mode"], "default")
         mutate.assert_not_called()
 
-    def test_settings_creation_requires_review_and_uses_selected_scope(self):
+    def test_settings_creation_requires_review_and_needs_no_project_or_platform(self):
         for approved in (False, True):
             application, _ = app(["n", "\x1b"], 80, 30)
             with patch.object(application, "read", side_effect=self.ui_read), \
                  patch.object(application, "edit", side_effect=["Shared development", "4.000"]), \
                  patch.object(application, "confirm_launch", return_value=approved), \
                  patch.object(application, "mutate") as mutate, self.assertRaises(ui.Back):
-                application.manage_spot_policies(PROJECT["project_id"], OFFERING["platform"])
+                application.manage_spot_policies()
             if approved:
-                mutate.assert_called_once_with("Creating pricing policy", "pricing-create", "--project-id", PROJECT["project_id"],
-                    "--platform", OFFERING["platform"], "--name", "Shared development", "--max-price", "4.000")
+                mutate.assert_called_once_with("Saving pricing policy", "pricing-create",
+                    "--name", "Shared development", "--max-price", "4.000")
             else:
                 mutate.assert_not_called()
 
-    def test_settings_edit_keeps_running_vm_limit_and_reviewed_version(self):
+    def test_settings_edit_reviews_future_launch_cap_and_version(self):
         self.resources = [resource()]
         self.resources[0]["status"]["running_vm_count"] = "2"
         application, _ = app(["1", "1", "\x1b"], 80, 30)
         with patch.object(application, "read", side_effect=self.ui_read), \
-             patch.object(application, "edit", return_value="Renamed policy") as edit, \
-             patch.object(application, "message"), patch.object(application, "confirm_launch", return_value=True), \
+             patch.object(application, "edit", side_effect=["Renamed policy", "3.125"]), \
+             patch.object(application, "confirm_launch", return_value=True) as review, \
              patch.object(application, "mutate") as mutate, self.assertRaises(ui.Back):
-            application.manage_spot_policies(PROJECT["project_id"], OFFERING["platform"])
-        edit.assert_called_once()
+            application.manage_spot_policies()
+        self.assertIn("Existing VMs keep their cap", "\n".join(review.call_args.args[0]))
         arguments = mutate.call_args.args
-        self.assertEqual(arguments[arguments.index("--max-price") + 1], "5.000")
+        self.assertEqual(arguments[arguments.index("--max-price") + 1], "3.125")
         self.assertEqual(arguments[arguments.index("--expected-version") + 1], "1")
 
     def test_platform_discovery_keeps_saved_policies_on_unavailable_platforms(self):
@@ -477,12 +489,14 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(result["platforms"], ["gpu-l40s-d"])
         self.assertTrue(result["warnings"])
 
-    def test_empty_settings_explain_how_to_begin_without_creating_resources(self):
-        application, _ = app([])
-        with patch.object(application, "read", return_value={"projects": []}), \
-             patch.object(application, "message") as message, patch.object(application, "mutate") as mutate:
+    def test_settings_work_without_personal_projects_or_cloud_access(self):
+        application, screen = app(["\x1b"])
+        with patch.object(application, "read", side_effect=self.ui_read), \
+             patch.object(core, "run_cli", side_effect=AssertionError("Settings must work offline")), \
+             patch.object(core, "sync_personal_projects", side_effect=AssertionError("No project required")), \
+             patch.object(application, "mutate") as mutate, self.assertRaises(ui.Back):
             application.pricing_settings()
-        self.assertIn("No personal projects", message.call_args.args[1])
+        self.assertIn("Default cap", screen.frames[-1])
         mutate.assert_not_called()
 
 

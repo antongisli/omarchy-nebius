@@ -8,6 +8,7 @@ import sys
 import nebius_jobs as jobs
 import nebius_ports as ports
 import nebius_pricing as pricing
+import nebius_global_pricing as global_pricing
 import nebius_uninstall as removal
 from nebius_catalog import list_images
 from typing import Any, Callable
@@ -42,12 +43,13 @@ INSTRUCTIONS = (
     "Use list_images to offer available custom or public images after project selection. "
     "Only personal VM destination projects are returned; shared tenant projects are intentionally hidden. If the chosen region has no "
     "personal project, offer to create one and explain that it remains even if VM creation is canceled. Treat project "
-    "as a secondary placement choice. New launches default to Spot (preemptible) with a reusable USD 5.000/GPU-hour policy. "
-    "The default is scoped to a project and exact platform; reuse its current limit and never reset edits. "
+    "as a secondary placement choice. New launches default to Spot (preemptible) with the saved cap, initially USD 5.000/GPU-hour. "
+    "Saved caps and the default are global across all GPUs, projects and regions in this plugin installation. "
     "Show spot_pricing and price_estimate from the plan, including stale/unavailable data. A cap is per GPU-hour, not a spending budget. "
-    "If USD 5.000 is outside the allowed range, ask the user to choose an allowed limit; never silently clamp it or follow spot price. "
+    "If the selected cap is outside the allowed range, ask the user to choose an allowed limit; never silently clamp it or follow spot price. "
     "Use list_pricing_policies, create_pricing_policy, update_pricing_policy and set_default_pricing_policy for reusable limits. "
-    "Policy edits affect every VM sharing it. Never stop VMs automatically to edit a policy. "
+    "Global cap edits apply to future launches; existing VMs keep their reviewed cap. Never stop VMs automatically to edit a policy. "
+    "Import older caps with list_existing_pricing_policies and import_pricing_policy, then explicitly set a global default. "
     "For Spot starts, first call review_vm_start, show pricing terms and pass pricing_review_id to start_vm. "
     "For pricing changes on stopped Spot VMs, first call plan_vm_pricing then apply_vm_pricing with its review_id. "
     "Let the user edit a proposed name and choose on-demand or preemptible allocation. "
@@ -139,7 +141,7 @@ TOOLS = [
             "project_id": {"type": "string", "description": "Optional compatible project returned with the GPU option."},
             "allocation": {"type": "string", "enum": ["on_demand", "preemptible"], "default": "preemptible"},
             "spot_mode": {"type": "string", "enum": ["default", "policy", "follow"], "default": "default"},
-            "pricing_policy_id": {"type": "string", "description": "Required for policy mode; must match the project and exact GPU platform."},
+            "pricing_policy_id": {"type": "string", "description": "Required for policy mode; use a saved global cap from list_pricing_policies."},
         },
         ["offering_id"],
         read_only=True,
@@ -196,18 +198,23 @@ TOOLS = [
     ),
 ]
 TOOLS.extend([
-    tool("list_pricing_policies", "List reusable policies and the saved default for a project/platform.",
-         {"project_id": {"type": "string"}, "platform": {"type": "string"}}, ["project_id"], read_only=True),
-    tool("create_pricing_policy", "Create a reusable USD per-GPU-hour cap after reviewing name, platform and limit. Existing matching named policies are reused.",
-         {"project_id": {"type": "string"}, "platform": {"type": "string"}, "name": {"type": "string"},
+    tool("list_pricing_policies", "List global USD per-GPU-hour caps and the saved default. Caps work with any GPU in every region.",
+         {}, [], read_only=True),
+    tool("create_pricing_policy", "Save a global USD per-GPU-hour cap after reviewing name and limit. Creates no cloud resources; applies to future launches.",
+         {"name": {"type": "string"},
           "max_price": {"type": "string", "description": "Positive USD decimal with at most three decimal places."}},
-         ["project_id", "platform", "name", "max_price"], read_only=False),
-    tool("update_pricing_policy", "Edit a shared policy after reviewing all affected VMs. Limit changes require zero running VMs; never stops VMs automatically.",
+         ["name", "max_price"], read_only=False),
+    tool("update_pricing_policy", "Edit a saved global cap for future launches. Existing VMs keep their reviewed cap; select the edited policy on a stopped VM to change it.",
          {"policy_id": {"type": "string"}, "name": {"type": "string"}, "max_price": {"type": "string"},
           "expected_version": {"type": "string", "description": "resource_version from the reviewed policy."}},
          ["policy_id", "name", "max_price", "expected_version"], read_only=False),
-    tool("set_default_pricing_policy", "Remember a reusable policy for future Spot launches in this project and platform.",
-         {"project_id": {"type": "string"}, "policy_id": {"type": "string"}}, ["project_id", "policy_id"], read_only=False),
+    tool("set_default_pricing_policy", "Remember a global cap for future Spot launches with any GPU in every region.",
+         {"policy_id": {"type": "string"}}, ["policy_id"], read_only=False),
+    tool("list_existing_pricing_policies", "List existing cloud caps available for import into global pricing. Does not change existing VMs.",
+         {}, [], read_only=True),
+    tool("import_pricing_policy", "Save a reviewed existing USD cap as a global policy. Does not change existing VMs or select a default.",
+         {"policy_id": {"type": "string"}, "name": {"type": "string"}, "expected_version": {"type": "string"}},
+         ["policy_id", "name", "expected_version"], read_only=False),
     tool("inspect_vm_pricing", "Read a VM's actual pricing mode, current policy eligibility and calculator estimate.",
          {"vm_id": {"type": "string"}}, ["vm_id"], read_only=True),
     tool("review_vm_start", "Prepare a read-only Spot start review. Show pricing terms and pass its token to start_vm after confirmation.",
@@ -268,10 +275,12 @@ def _call(name: str, arguments: dict[str, Any]) -> Any:
         "create_gpu_vm": lambda: jobs.submit(["create", "--plan-id", str(arguments.get("plan_id", ""))]),
         "start_vm": lambda: jobs.submit(["start", "--vm-id", str(arguments.get("vm_id", "")),
                                          "--pricing-review-id", str(arguments.get("pricing_review_id", ""))]),
-        "list_pricing_policies": lambda: pricing.list_policies(arguments["project_id"], arguments.get("platform", "")),
-        "set_default_pricing_policy": lambda: pricing.select_default(arguments["project_id"], arguments["policy_id"]),
-        "create_pricing_policy": lambda: jobs.submit(["pricing-create", "--project-id", arguments["project_id"],
-            "--platform", arguments["platform"], "--name", arguments["name"], "--max-price", arguments["max_price"]]),
+        "list_pricing_policies": lambda: global_pricing.list_policies(),
+        "set_default_pricing_policy": lambda: global_pricing.select_default(arguments["policy_id"]),
+        "list_existing_pricing_policies": lambda: global_pricing.existing_policies(),
+        "import_pricing_policy": lambda: jobs.submit(["pricing-import", "--policy-id", arguments["policy_id"],
+            "--name", arguments["name"], "--expected-version", arguments["expected_version"]]),
+        "create_pricing_policy": lambda: jobs.submit(["pricing-create", "--name", arguments["name"], "--max-price", arguments["max_price"]]),
         "update_pricing_policy": lambda: jobs.submit(["pricing-update", "--policy-id", arguments["policy_id"],
             "--name", arguments["name"], "--max-price", arguments["max_price"], "--expected-version", arguments["expected_version"]]),
         "inspect_vm_pricing": lambda: pricing.vm_details(arguments["vm_id"]),

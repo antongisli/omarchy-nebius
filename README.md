@@ -53,12 +53,13 @@ RTX PRO 6000 and L40S variants share one GPU entry. Configurations with the same
 GPU count, CPU and RAM are combined; the plugin picks an available compatible
 variant for your project. Different machine sizes remain separate choices.
 
-In **Settings → Spot pricing policies**, choose a project and GPU platform to
-create policies, edit limits, or set a default. **VM settings → Spot pricing**
-selects a saved policy for a launch and links back to management. The initial
-cap is **USD 5 per GPU-hour**; edited defaults are preserved. If $5 is outside
-the allowed range, choose an allowed value before launching. Current estimates
-and policy limits are shown separately. [Spot pricing guide →](docs/reference.md#spot-pricing-and-reusable-policies)
+In **Settings → Spot pricing policies**, save a named **USD per GPU-hour** cap
+and choose a default for **all GPUs, in every region**. No project or region
+selection is needed. **VM settings → Spot pricing** selects a saved cap for a
+launch. The initial cap is **USD 5 per GPU-hour**. The plugin handles the cloud
+policies and checks the cap when you launch. Edits apply to future launches;
+existing VMs keep their cap. Current estimates and caps are shown separately.
+[Spot pricing guide →](docs/reference.md#spot-pricing-and-reusable-policies)
 
 ## 👋 New to Nebius?
 

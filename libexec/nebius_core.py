@@ -1169,7 +1169,8 @@ def plan_gpu_vm(
     )
     if allocation == "preemptible":
         import nebius_pricing as pricing
-        plan["spot_pricing"] = pricing.resolve(project["project_id"], plan["platform"], spot_mode, pricing_policy_id)
+        import nebius_global_pricing as global_pricing
+        plan["spot_pricing"] = global_pricing.resolve(project["project_id"], plan["platform"], spot_mode, pricing_policy_id)
         plan["preflight"] = pricing.add_preflight(plan["preflight"], plan["spot_pricing"])
         plan["price_estimate"] = pricing.estimate(plan)
         plan["pricing_url"] = pricing.PRICING_URL
@@ -2477,22 +2478,27 @@ def parse_args() -> argparse.Namespace:
         else:
             item.add_argument("--pricing-review-id", default="")
     policies = sub.add_parser("pricing-policies")
-    policies.add_argument("--project-id", required=True)
+    policies.add_argument("--project-id", default="", help="Inspect existing project policies instead of global caps")
     policies.add_argument("--platform", default="")
     platforms = sub.add_parser("pricing-platforms")
     platforms.add_argument("--project-id", required=True)
+    sub.add_parser("pricing-existing")
+    imported = sub.add_parser("pricing-import")
+    imported.add_argument("--policy-id", required=True)
+    imported.add_argument("--name", required=True)
+    imported.add_argument("--expected-version", required=True)
     for command in ("pricing-create", "pricing-update"):
         item = sub.add_parser(command)
         item.add_argument("--name", required=True)
         item.add_argument("--max-price", required=True)
         if command == "pricing-create":
-            item.add_argument("--project-id", required=True)
-            item.add_argument("--platform", required=True)
+            item.add_argument("--project-id", default="")
+            item.add_argument("--platform", default="")
         else:
             item.add_argument("--policy-id", required=True)
             item.add_argument("--expected-version", required=True)
     preference = sub.add_parser("pricing-default")
-    preference.add_argument("--project-id", required=True)
+    preference.add_argument("--project-id", default="")
     preference.add_argument("--policy-id", required=True)
     for command in ("vm-pricing", "review-start", "plan-vm-pricing", "set-vm-pricing"):
         item = sub.add_parser(command)
@@ -2546,18 +2552,27 @@ def main() -> int:
         elif args.command == "plan":
             value = plan_gpu_vm(args.name, args.offering_id, args.project_id, args.allocation,
                                 args.auto_stop_hours, args.image_id, args.disk_gib, args.spot_mode, args.pricing_policy_id)
-        elif args.command in {"pricing-policies", "pricing-platforms", "pricing-create", "pricing-update", "pricing-default", "vm-pricing", "review-start", "plan-vm-pricing", "set-vm-pricing"}:
+        elif args.command in {"pricing-policies", "pricing-platforms", "pricing-existing", "pricing-import", "pricing-create", "pricing-update", "pricing-default", "vm-pricing", "review-start", "plan-vm-pricing", "set-vm-pricing"}:
             import nebius_pricing as pricing
+            import nebius_global_pricing as global_pricing
             if args.command == "pricing-policies":
-                value = pricing.list_policies(args.project_id, args.platform)
+                value = pricing.list_policies(args.project_id, args.platform) if args.project_id else global_pricing.list_policies()
             elif args.command == "pricing-platforms":
                 value = pricing.list_platforms(args.project_id)
+            elif args.command == "pricing-existing":
+                value = global_pricing.existing_policies()
+            elif args.command == "pricing-import":
+                value = global_pricing.import_policy(args.policy_id, args.name, args.expected_version)
             elif args.command == "pricing-create":
-                value = pricing.create_policy(args.project_id, args.platform, args.name, args.max_price)
+                if bool(args.project_id) != bool(args.platform):
+                    raise NebiusError("Creating an existing-style cloud policy requires both project and platform")
+                value = (pricing.create_policy(args.project_id, args.platform, args.name, args.max_price) if args.project_id else
+                         global_pricing.create_policy(args.name, args.max_price))
             elif args.command == "pricing-update":
-                value = pricing.update_policy(args.policy_id, args.name, args.max_price, args.expected_version)
+                manager = global_pricing if args.policy_id.startswith("spotpolicy-") else pricing
+                value = manager.update_policy(args.policy_id, args.name, args.max_price, args.expected_version)
             elif args.command == "pricing-default":
-                value = pricing.select_default(args.project_id, args.policy_id)
+                value = pricing.select_default(args.project_id, args.policy_id) if args.project_id else global_pricing.select_default(args.policy_id)
             elif args.command == "vm-pricing":
                 value = pricing.vm_details(args.vm_id)
             elif args.command == "review-start":

@@ -666,7 +666,7 @@ class App:
             try:
                 chosen = self.menu("Get a GPU" if launch else "GPU capacity", rows,
                     subtitle=self.snapshot_note(self.capacity),
-                    notes=["Spot uses changing prices. Default cap: USD 5.000/GPU-hour; saved policies are reusable."] if self.allocation == "preemptible" else ["On-demand uses regular PAYG capacity."],
+                    notes=["Spot prices change. Saved caps apply per GPU-hour across all regions."] if self.allocation == "preemptible" else ["On-demand uses regular PAYG capacity."],
                     actions={"p": "__allocation", "r": "__refresh"},
                     footer="↑↓ / j k move   Enter configurations   P allocation   R refresh   / search   Esc back")
                 if chosen == "__allocation":
@@ -767,82 +767,80 @@ class App:
                 return chosen
 
     def spot_policy_rows(self, result):
-        defaults = [p for p in result["policies"] if p["id"] == result["default_policy_id"] or
-                    (not result["default_policy_id"] and p.get("labels", {}).get("managed-by") == core.MANAGED_BY
-                     and p.get("labels", {}).get("pricing-default") == "true")]
-        default_note = (f"{defaults[0]['name']} · {defaults[0]['currency']} {defaults[0]['max_price']}/GPU-hour" if len(defaults) == 1 else
-                        "Multiple defaults; choose a policy in Settings" if len(defaults) > 1 else
-                        "Saved policy is missing; choose another default in Settings" if result["default_policy_id"] else
-                        "Initial cap: USD 5.000/GPU-hour; created on launch confirmation")
+        defaults = [p for p in result["policies"] if p["id"] == result["default_policy_id"]]
+        default_note = (f"{defaults[0]['name']} · {defaults[0]['currency']} {defaults[0]['max_price']}/GPU-hour" if defaults else
+                        "Choose a default in Settings")
         rows = [(policy["name"] + (" · default" if policy in defaults else ""),
-                 f"{policy['currency']} {policy['max_price']}/GPU-hour · {policy['running_vm_count']} running VM(s)\n"
-                 + policy["scheduling_state"].removeprefix("SCHEDULING_STATE_").lower(), policy, "Saved policies")
+                 f"{policy['currency']} {policy['max_price']}/GPU-hour", policy, "Saved policies")
                 for policy in result["policies"]]
         return rows, default_note
 
-    def choose_spot_pricing(self, project_id, platform):
+    def choose_spot_pricing(self):
         while True:
-            result = self.read("Loading reusable policies", "pricing-policies", "--project-id", project_id, "--platform", platform)
+            result = self.read("Loading saved caps", "pricing-policies")
             saved, default_note = self.spot_policy_rows(result)
             rows = [("Use saved default", default_note, "default", "Pricing"), *saved,
                     ("Follow spot price", "Accept changing prices without a user-set maximum", "follow", "Other pricing"),
                     ("Manage policies in Settings", "Create, edit or change the default; return here to select", "manage", "Settings")]
-            choice = self.menu("Spot pricing", rows, subtitle=platform,
-                               notes=["Select pricing for this VM. Manage reusable policies in Settings."], actions={"e": "manage"})
+            choice = self.menu("Spot pricing", rows, subtitle="Price per GPU-hour",
+                               notes=["Saved caps work with any GPU, in every region."], actions={"e": "manage"})
             if choice in ("default", "follow"):
                 return {"mode": choice, "policy_id": "", "platform": None}
             if choice == "manage":
                 try:
-                    self.manage_spot_policies(project_id, platform)
+                    self.manage_spot_policies()
                 except Back:
                     pass
                 continue
-            return {"mode": "policy", "policy_id": choice["id"], "platform": choice["platform"], "policy": choice}
+            return {"mode": "policy", "policy_id": choice["id"], "platform": None, "policy": choice}
 
-    def manage_spot_policies(self, project_id, platform, project_label=""):
+    def manage_spot_policies(self):
         while True:
-            result = self.read("Loading reusable policies", "pricing-policies", "--project-id", project_id, "--platform", platform)
+            result = self.read("Loading saved caps", "pricing-policies")
             saved, default_note = self.spot_policy_rows(result)
             choice = self.menu("Spot pricing policies", [
                 *saved, ("Create a policy", "Name and save a reusable USD limit", "new", "Manage"),
-            ], subtitle=(project_label or project_id) + " · " + platform,
+                ("Import an existing cap", "Reuse a price limit already saved in Nebius", "import", "Manage"),
+            ], subtitle="All GPUs · all regions",
                 notes=["Default: " + default_note,
-                       "Policies are shared within this project and exact GPU platform.", result["range_note"]],
+                       "Edits apply to future launches. Existing VMs keep their cap."],
                 actions={"n": "new", "r": "refresh"})
             if choice == "refresh":
                 continue
             try:
+                if choice == "import":
+                    self.import_spot_policy()
+                    continue
                 if choice == "new":
-                    name = self.edit("Policy name", pricing.default_name(platform) + "-custom", validate=pricing.policy_name)
+                    name = self.edit("Policy name", "My GPU cap", validate=pricing.policy_name)
                     maximum = self.edit("Maximum USD / GPU-hour", pricing.DEFAULT_MAX_PRICE, validate=pricing.amount,
                                         notes=[result["range_note"], "This is a per-GPU limit. Storage and other charges are separate."])
-                    if self.confirm_launch([f"Create reusable policy {name}", f"USD {maximum}/GPU-hour · {platform}",
-                                            "The policy remains available for future VMs in this project."], project_id,
+                    if self.confirm_launch([f"Save policy {name}", f"USD {maximum}/GPU-hour · all GPUs, all regions",
+                                            "Available for future launches. Existing VMs keep their cap."],
+                                           f"{name}: USD {maximum}/GPU-hour",
                                            title="Create pricing policy", action="create policy"):
-                        self.mutate("Creating pricing policy", "pricing-create", "--project-id", project_id,
-                                    "--platform", platform, "--name", name, "--max-price", maximum)
+                        self.mutate("Saving pricing policy", "pricing-create", "--name", name, "--max-price", maximum)
                     continue
                 action = self.menu(choice["name"], [
-                    ("Edit policy", "Rename or change the shared price limit", "edit"),
-                    ("Set as default", "Use for future launches in this project and platform", "default"),
-                    ("Policy details", "View platform, eligibility and identifiers", "details"),
+                    ("Edit policy", "Rename or change the cap for future launches", "edit"),
+                    ("Set as default", "Use for future launches with any GPU, in every region", "default"),
+                    ("Policy details", "View the cap and how it applies", "details"),
                 ], subtitle="Settings · Spot pricing policies",
-                    notes=[f"{choice['currency']} {choice['max_price']}/GPU-hour · {choice['running_vm_count']} running VM(s)"])
+                    notes=[f"{choice['currency']} {choice['max_price']}/GPU-hour · all GPUs, all regions"])
                 if action == "details":
-                    self.message("Policy details", json.dumps(choice, indent=2))
+                    self.message(choice["name"], f"Maximum: {choice['currency']} {choice['max_price']}/GPU-hour\n\n"
+                                 "Saved in this plugin for any GPU, in every region. Your cap is checked at launch. "
+                                 "Storage and other charges are separate.\n\n"
+                                 "Edits apply to future launches. To change an existing VM's cap, stop it and select the policy in VM actions → Spot pricing.")
                     continue
                 if action == "default":
-                    self.read("Saving default policy", "pricing-default", "--project-id", project_id, "--policy-id", choice["id"])
-                    self.notice = choice["name"] + " is now the default for " + platform + "."
+                    self.read("Saving default policy", "pricing-default", "--policy-id", choice["id"])
+                    self.notice = choice["name"] + " is now the default for all GPUs and regions."
                     continue
                 name = self.edit("Policy name", choice["name"], validate=pricing.policy_name)
-                maximum = choice["max_price"]
-                if choice["running_vm_count"]:
-                    self.message("Price limit is in use", "Stop all VMs sharing this policy to change its limit, or create a separate policy. You can still rename it.")
-                else:
-                    maximum = self.edit("Maximum USD / GPU-hour", maximum, validate=pricing.amount, notes=[result["range_note"]])
-                if self.confirm_launch([f"Update shared policy {choice['name']}", f"New name: {name}\nMaximum: USD {maximum}/GPU-hour",
-                                        "Every VM referencing this policy will use these terms."], json.dumps(choice, indent=2),
+                maximum = self.edit("Maximum USD / GPU-hour", choice["max_price"], validate=pricing.amount, notes=[result["range_note"]])
+                if self.confirm_launch([f"Update policy {choice['name']}", f"New name: {name}\nMaximum: USD {maximum}/GPU-hour",
+                                        "Applies to future launches in all regions. Existing VMs keep their cap."], json.dumps(choice, indent=2),
                                        title="Edit pricing policy", action="save policy"):
                     self.mutate("Updating pricing policy", "pricing-update", "--policy-id", choice["id"], "--name", name,
                                 "--max-price", maximum, "--expected-version", choice["resource_version"])
@@ -852,37 +850,21 @@ class App:
                 self.show_error(error)
 
     def pricing_settings(self):
-        while True:
-            result = self.read("Loading your projects", "projects")
-            if not result["projects"]:
-                self.message("Spot pricing policies", "No personal projects are available. Create a project through Get a GPU, then return to Settings to manage its policies.")
-                return
-            project = self.menu("Spot pricing policies", [
-                (p["project_name"], p["region"], p) for p in result["projects"]
-            ], subtitle="Choose a project", notes=["Manage reusable policies and defaults without launching a VM."])
-            try:
-                self.pricing_platform_settings(project)
-            except Back:
-                pass
-            except core.NebiusError as error:
-                self.show_error(error)
+        self.manage_spot_policies()
 
-    def pricing_platform_settings(self, project):
-        while True:
-            result = self.read("Loading GPU platforms", "pricing-platforms", "--project-id", project["project_id"])
-            if not result["platforms"]:
-                self.message("Spot pricing policies", "This project has no Spot GPU platforms or saved policies. Choose another project.")
-                return
-            platform = self.menu("Spot pricing policies", [
-                (catalog.gpu_name(name), name, name) for name in result["platforms"]
-            ], subtitle=project["project_name"] + " · " + project["region"],
-                notes=["Choose the GPU platform. Policies are separate for each exact platform."] + result["warnings"])
-            try:
-                self.manage_spot_policies(project["project_id"], platform, project["project_name"])
-            except Back:
-                pass
-            except core.NebiusError as error:
-                self.show_error(error)
+    def import_spot_policy(self):
+        result = self.read("Loading existing caps", "pricing-existing")
+        if not result["policies"]:
+            self.message("Import a cap", "No existing USD policies were found.\n" + "\n".join(result["warnings"]))
+            return
+        choice = self.menu("Import a cap", [
+            (row["name"], f"USD {row['max_price']}/GPU-hour", row) for row in result["policies"]
+        ], notes=["Save an existing limit for use with any GPU, in every region."] + result["warnings"])
+        name = self.edit("Policy name", choice["name"], validate=pricing.policy_name)
+        if self.confirm_launch([f"Save {name}: USD {choice['max_price']}/GPU-hour", "Existing VMs keep their cap."],
+                               json.dumps(choice, indent=2), title="Import pricing policy", action="import cap"):
+            self.mutate("Importing pricing policy", "pricing-import", "--policy-id", choice["id"], "--name", name,
+                        "--expected-version", choice["resource_version"])
 
     def launch_flow(self, offering):
         # A new project needs a new disk. Existing projects may already have a
@@ -914,7 +896,7 @@ class App:
             if self.allocation == "preemptible":
                 settings += [("Spot pricing", (spot.get("policy") or {}).get("name") or
                               ("Follow spot price · no user-set maximum" if spot["mode"] == "follow" else
-                               "Saved default · initial cap USD 5.000/GPU-hour"), "pricing", "Configuration")]
+                               "Saved global default"), "pricing", "Configuration")]
             settings += [("Review and create", "Run preflight checks and review cost before confirming", "review", "Next step")]
             action = self.menu("VM settings", settings, subtitle=f"{offering['gpu_count']}× {offering['gpu_label']} · {offering['region']}",
                notes=[self.notice] if self.notice else [], actions={"p": "allocation"},
@@ -945,9 +927,7 @@ class App:
                     pass
             elif action == "pricing":
                 try:
-                    selected = catalog.resolve_variant(offering, project_id, self.allocation,
-                                                       image["compatible_offering_ids"] if image else None)
-                    spot = self.choose_spot_pricing(project_id, selected["platform"])
+                    spot = self.choose_spot_pricing()
                 except Back:
                     pass
                 except core.NebiusError as error:
@@ -959,7 +939,6 @@ class App:
                 try:
                     project_id = self.menu("Place VM in", [(p["project_name"], p["region"], p["project_id"]) for p in projects])
                     image = None
-                    spot = {"mode": "default", "policy_id": "", "platform": None}
                 except Back:
                     pass
             else:
@@ -1338,7 +1317,7 @@ class App:
         if not vm.get("instance_deleted"):
             rows += [("Disks and storage", "Inspect attached disks and cleanup options", "storage", "Inspect")]
             if vm.get("allocation") == "preemptible" and not service_managed:
-                rows += [("Spot pricing", "Inspect the shared policy or change pricing on a stopped VM", "pricing", "Inspect")]
+                rows += [("Spot pricing", "View this VM's cap or change it while stopped", "pricing", "Inspect")]
         rows += [("Launch timings", "Saved stages and total time to SSH ready", "timings", "Inspect")]
         rows += [("Full details", "Resource identifiers and state", "details", "Inspect")]
         if vm.get("can_delete") and not vm.get("operation_job_id"):
@@ -1383,7 +1362,7 @@ class App:
                      if current["mode"] in {"policy", "follow"} else [current.get("note", "On-demand pricing")])
             self.message("VM Spot pricing", "\n\n".join(lines), details=json.dumps(details, indent=2))
             if vm["state"] == "stopped":
-                selection = self.choose_spot_pricing(vm["project_id"], vm["platform"])
+                selection = self.choose_spot_pricing()
                 review = self.read("Reviewing pricing change", "plan-vm-pricing", "--vm-id", vm["id"],
                                    "--spot-mode", selection["mode"], "--pricing-policy-id", selection["policy_id"])
                 if self.confirm_launch(pricing.review_lines(review["pricing"]) + ["The VM stays stopped."],
@@ -1738,7 +1717,7 @@ class App:
             current = core.inventory_preferences()["include_kubernetes_nodes"]
             state = "SHOWN" if current else "HIDDEN"
             rows = [
-                ("Spot pricing policies", "Create and edit reusable limits; choose defaults by project and GPU platform", "pricing", "Pricing"),
+                ("Spot pricing policies", "Save price caps and a default for all GPUs and regions", "pricing", "Pricing"),
                 ("Kubernetes nodes  [ " + state + " ]",
                  "Include cluster worker VMs in Your VMs, SSH choices and the running-VM badge"
                  if current else "Keep cluster worker VMs out of Your VMs, SSH choices and the running-VM badge",
