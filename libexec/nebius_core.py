@@ -53,13 +53,13 @@ IMAGE_FAMILY = "ubuntu24.04-cuda13.0"
 # Published PAYG USD prices checked against the official Compute pricing page.
 # Unified platforms are per GPU-hour. L40S also charges CPU and RAM separately.
 ON_DEMAND_GPU_USD = {
-    "gpu-b300-sxm": 7.85, "gpu-b200-sxm": 7.15, "gpu-b200-sxm-a": 7.15,
-    "gpu-h200-sxm": 4.50, "gpu-h100-sxm": 3.85,
+    "gpu-b300-sxm": 9.50, "gpu-b200-sxm": 8.50, "gpu-b200-sxm-a": 8.50,
+    "gpu-h200-sxm": 5.40, "gpu-h100-sxm": 4.50,
     "gpu-rtx6000": 1.80, "gpu-rtx6000-a": 1.80,
     "gpu-l40s-a": 1.35, "gpu-l40s-d": 1.35,
 }
 PRICING_URL = "https://docs.nebius.com/compute/resources/pricing"
-PRICING_CHECKED_AT = "2026-09-09"
+PRICING_CHECKED_AT = "2026-10-08"
 DISK_USD_PER_GIB_MONTH = 0.071
 
 
@@ -1022,7 +1022,7 @@ def _availability_score(allocation: dict[str, Any]) -> tuple[int, int]:
 def _hourly_estimate(platform: str, gpu_count: int, vcpu_count: int, memory_gib: int,
                      allocation: str = "preemptible", disk_gib: int = DEFAULT_DISK_GIB) -> float | None:
     if allocation == "preemptible":
-        return None  # Spot requires a current calculator response, never a fixed discount.
+        return None  # Spot pricing requires a current calculator response, never a fixed discount.
     gpu_price = ON_DEMAND_GPU_USD.get(platform)
     if gpu_price is None:
         return None
@@ -1056,7 +1056,7 @@ def plan_gpu_vm(
     pricing_policy_id: str = "",
 ) -> dict[str, Any]:
     if allocation not in {"preemptible", "on_demand"}:
-        raise NebiusError("Choose on_demand or preemptible allocation")
+        raise NebiusError("Choose on-demand or preemptible allocation")
     if allocation == "on_demand" and (spot_mode != "default" or pricing_policy_id):
         raise NebiusError("Spot pricing options cannot be used with on-demand allocation")
     if auto_stop_hours != 0:
@@ -1177,7 +1177,7 @@ def plan_gpu_vm(
         plan["pricing_checked_at"] = plan["price_estimate"].get("checked_at")
         plan["estimated_usd_per_hour"] = (float(plan["price_estimate"]["total_per_hour"])
                                            if plan["price_estimate"]["state"] == "current" else None)
-        plan["pricing_note"] = "Spot estimates change with the market. The policy limit is per GPU-hour, not a spending budget. Disks remain billable while stopped."
+        plan["pricing_note"] = "Spot price estimates change with the market. The policy limit is per GPU-hour, not a spending budget. Disks remain billable while stopped."
     PLAN_DIR.mkdir(parents=True, exist_ok=True)
     PLAN_DIR.chmod(0o700)
     _atomic_json(PLAN_DIR / f"{plan['plan_id']}.json", plan)
@@ -1529,7 +1529,7 @@ def _instance_request(plan: dict[str, Any], disk_id: str, *, cloud_init: str | N
     if plan["allocation"] == "preemptible":
         import nebius_pricing as pricing
         if not plan.get("spot_pricing"):
-            raise NebiusError("This older Spot plan has no pricing choice. Review a fresh plan with a pricing policy")
+            raise NebiusError("This older preemptible plan has no pricing choice. Review a fresh plan with a pricing policy")
         request["spec"]["preemptible"] = {"on_preemption": "STOP"}
         request["spec"]["recovery_policy"] = "FAIL"
         request["spec"].update(pricing.request_fields(plan["spot_pricing"]))
@@ -1651,7 +1651,7 @@ def create_gpu_vm(plan_id: str, *, dry_run: bool = False) -> dict[str, Any]:
     if plan.get("auto_stop_hours"):
         raise NebiusError("This old plan included auto-stop, which has been removed. Review a new plan before creating a VM without a timer.")
     if plan.get("allocation") == "preemptible" and not plan.get("spot_pricing"):
-        raise NebiusError("This older Spot plan has no pricing choice. Review a fresh plan with a pricing policy")
+        raise NebiusError("This older preemptible plan has no pricing choice. Review a fresh plan with a pricing policy")
     try:
         expires_at = dt.datetime.fromisoformat(str(plan["expires_at"]))
     except (KeyError, ValueError) as error:
@@ -2498,6 +2498,7 @@ def parse_args() -> argparse.Namespace:
             item.add_argument("--policy-id", required=True)
             item.add_argument("--expected-version", required=True)
     preference = sub.add_parser("pricing-default")
+    preference.add_argument("--platform", action="append", default=[])
     preference.add_argument("--project-id", default="")
     preference.add_argument("--policy-id", required=True)
     for command in ("vm-pricing", "review-start", "plan-vm-pricing", "set-vm-pricing"):
@@ -2572,7 +2573,7 @@ def main() -> int:
                 manager = global_pricing if args.policy_id.startswith("spotpolicy-") else pricing
                 value = manager.update_policy(args.policy_id, args.name, args.max_price, args.expected_version)
             elif args.command == "pricing-default":
-                value = pricing.select_default(args.project_id, args.policy_id) if args.project_id else global_pricing.select_default(args.policy_id)
+                value = pricing.select_default(args.project_id, args.policy_id) if args.project_id else global_pricing.select_default(args.policy_id, args.platform)
             elif args.command == "vm-pricing":
                 value = pricing.vm_details(args.vm_id)
             elif args.command == "review-start":

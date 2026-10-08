@@ -33,7 +33,7 @@ Out of VRAM in **ComfyUI**? Trying a bigger model with **vLLM** or **Open WebUI*
 
 ## ✨ What you get
 
-- ⚡ **GPU first.** Compare types, regions and availability. Start with Spot and a reusable $5/GPU-hour cap. Toggle on-demand or Spot with **P**.
+- ⚡ **GPU first.** Compare types, regions and availability. Start with preemptible VMs using Spot pricing and a default cap matched to your GPU. Toggle on-demand or preemptible with **P**.
 - ⌨️ **Keyboard-native.** Launch, SSH, start, stop and review deletion. No command strings to memorize.
 - 🔌 **Your app, at localhost.** Saved SSH port forwards reconnect after sleep or network changes.
 - 📊 **Know what's running.** A live VM-count badge, background progress and persistent results.
@@ -53,12 +53,15 @@ RTX PRO 6000 and L40S variants share one GPU entry. Configurations with the same
 GPU count, CPU and RAM are combined; the plugin picks an available compatible
 variant for your project. Different machine sizes remain separate choices.
 
-In **Settings → Spot pricing policies**, save a named **USD per GPU-hour** cap
-and choose a default for **all GPUs, in every region**. No project or region
-selection is needed. **VM settings → Spot pricing** selects a saved cap for a
-launch. The initial cap is **USD 5 per GPU-hour**. The plugin handles the cloud
-policies and checks the cap when you launch. Edits apply to future launches;
-existing VMs keep their cap. Current estimates and caps are shown separately.
+In **Settings → Spot pricing policies**, manage named **USD per GPU-hour** caps
+and a default for each GPU, across every region. Initial defaults use the
+[published PAYG GPU rate](https://docs.nebius.com/compute/resources/pricing)
+minus **$0.01**, including **$1.79 for RTX PRO 6000**. The plugin selects the
+matching default automatically. No project or region selection is needed.
+**VM settings → Spot pricing** can select a different saved cap for a launch.
+The plugin handles the cloud policies and checks the cap when you launch.
+Edits apply to future launches; existing VMs keep their cap. Current estimates
+and caps are shown separately.
 [Spot pricing guide →](docs/reference.md#spot-pricing-and-reusable-policies)
 
 ## 👋 New to Nebius?

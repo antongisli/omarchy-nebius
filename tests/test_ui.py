@@ -79,11 +79,13 @@ class KeyboardTests(unittest.TestCase):
         self.assertEqual(application.menu("Menu", [("First", "", 1, "Group A"), ("Second", "", 2, "Group B")]), 2)
 
     def test_narrow_configuration_shows_both_allocations_and_keyboard_controls(self):
-        application, screen = app(["\n"], 48, 20)
-        detail = "16 vCPU · 200 GiB RAM\nOn-demand: 4 available\nPreemptible: unavailable"
-        application.menu("Configuration", [("1× H100 · eu-north1", detail, 1)],
-                         notes=["Choose GPU count and region. Your project comes next."],
-                         actions={"p": "allocation", "r": "refresh"})
+        application, screen = app(["\x1b"], 48, 20)
+        application.capacity = {"source": "live", "offerings": [{
+            "gpu_label": "H100", "platform": "gpu-h100-sxm", "gpu_count": 1, "region": "eu-north1",
+            "vcpu_count": 16, "memory_gib": 200,
+            "on_demand": {"available": 4}, "preemptible": {"available": 0},
+        }]}
+        application.configuration("H100")
         for text in ["On-demand: 4 available", "Preemptible: unavailable", "[Enter]", "[Esc]", "[P]", "[?]"]:
             self.assertIn(text, screen.frames[-1])
 
@@ -135,11 +137,11 @@ class KeyboardTests(unittest.TestCase):
                     application.menu("GPU capacity", [("H100", "8 available", "gpu")],
                                      subtitle="Live snapshot", actions={"p": "toggle"})
                     top = screen.frames[-1].splitlines()[3]
-                    self.assertIn("[ On-demand | Spot ]", top)
+                    self.assertIn("[ On-demand | Preemptible ]", top)
                     self.assertIn("[P] switch", top)
-                    segments = [draw for draw in screen.draws if draw[0] == 3 and draw[2].strip() in ("On-demand", "Spot")]
+                    segments = [draw for draw in screen.draws if draw[0] == 3 and draw[2].strip() in ("On-demand", "Preemptible")]
                     selected = [draw[2].strip() for draw in segments if draw[3] & curses.A_REVERSE]
-                    self.assertEqual(selected, ["Spot" if mode == "preemptible" else "On-demand"])
+                    self.assertEqual(selected, ["Preemptible" if mode == "preemptible" else "On-demand"])
                     self.assertIn("Live snapshot", screen.frames[-1])
 
     def test_p_updates_capacity_for_both_modes_without_a_cloud_request(self):

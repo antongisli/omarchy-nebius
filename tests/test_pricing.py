@@ -111,15 +111,16 @@ class PricingTests(unittest.TestCase):
             self.assertEqual(args, ())
             return global_pricing.list_policies()
         if command == "pricing-default":
-            return global_pricing.select_default(args[args.index("--policy-id") + 1])
+            return global_pricing.select_default(args[args.index("--policy-id") + 1],
+                                                 [args[i + 1] for i, arg in enumerate(args) if arg == "--platform"])
         if command == "pricing-existing":
             return global_pricing.existing_policies()
         raise AssertionError("Unexpected settings read: " + command)
 
-    def test_default_plan_is_spot_five_dollars_and_read_only(self):
+    def test_default_plan_uses_gpu_payg_minus_one_cent_and_is_read_only(self):
         plan = self.plan()
         self.assertEqual(plan["allocation"], "preemptible")
-        self.assertEqual(plan["spot_pricing"]["policy"]["max_price"], "5.000")
+        self.assertEqual(plan["spot_pricing"]["policy"]["max_price"], "5.390")
         self.assertTrue(plan["spot_pricing"]["create_default"])
         self.assertEqual(self.writes(), [])
         self.assertTrue(plan["preflight"]["ready"])
@@ -152,7 +153,7 @@ class PricingTests(unittest.TestCase):
         self.assertEqual(pricing.resolve(PROJECT["project_id"], OFFERING["platform"])["policy"]["id"], "pricingpolicy-custom")
         other = pricing.resolve(PROJECT["project_id"], "gpu-l40s-a")
         self.assertTrue(other["create_default"])
-        self.assertEqual(other["policy"]["max_price"], "5.000")
+        self.assertEqual(other["policy"]["max_price"], "1.340")
 
     def test_deleted_preferred_policy_never_falls_back(self):
         self.resources = [resource()]
@@ -198,13 +199,13 @@ class PricingTests(unittest.TestCase):
                 core.create_gpu_vm(plan["plan_id"])
             security.assert_not_called()
         self.assertEqual(len(self.writes()), 1)
-        self.assertEqual(json.loads(self.writes()[0][3])["spec"]["pricing"]["max_price_v1"]["max_price"], "5.000")
+        self.assertEqual(json.loads(self.writes()[0][3])["spec"]["pricing"]["max_price_v1"]["max_price"], "5.390")
         self.assertFalse(core._pending_launches())
 
     def test_range_and_expiry_errors_give_the_user_the_required_next_step(self):
         error = pricing._policy_error(core.NebiusError("OutOfRange: maximum exceeds allowed range"))
         self.assertIn("enter an allowed value", core.explain_error(str(error))["message"])
-        explanation = core.explain_error("Spot start review expired or does not match this VM. Review again")
+        explanation = core.explain_error("Spot pricing review expired or does not match this VM. Review again")
         self.assertIn("Review the current settings and pricing", explanation["recovery"])
         self.assertNotIn("reconnect", explanation["recovery"])
 
@@ -315,7 +316,7 @@ class PricingTests(unittest.TestCase):
         plan = self.plan()
         plan.pop("spot_pricing")
         core._atomic_json(core.PLAN_DIR / (plan["plan_id"] + ".json"), plan)
-        with self.assertRaisesRegex(core.NebiusError, "older Spot plan"):
+        with self.assertRaisesRegex(core.NebiusError, "older preemptible plan"):
             core.create_gpu_vm(plan["plan_id"], dry_run=True)
         self.assertFalse(self.writes())
 
@@ -399,7 +400,7 @@ class PricingTests(unittest.TestCase):
     def test_policy_picker_is_keyboard_operable_at_narrow_width(self):
         row = global_pricing.list_policies()["policies"][0]
         application, screen = app(["2"], width=48, height=20)
-        with patch.object(application, "read", return_value={"policies": [row], "default_policy_id": "", "range_note": "Allowed range: console"}), \
+        with patch.object(application, "read", return_value={"policies": [row], "default_policy_ids": {}, "range_note": "Allowed range: console"}), \
              patch.object(application, "mutate") as mutate:
             choice = application.choose_spot_pricing()
         self.assertEqual(choice["policy_id"], row["id"])
@@ -420,7 +421,7 @@ class PricingTests(unittest.TestCase):
                 application.preferences()
             self.assertIn("Spot pricing policies", "\n".join(screen.frames))
             self.assertIn("Settings", screen.frames[-1])
-            self.assertNotIn("[ On-demand | Spot ]", screen.frames[0])
+            self.assertNotIn("[ On-demand | Preemptible ]", screen.frames[0])
             self.assertNotIn("Choose a project", "\n".join(screen.frames))
             self.assertNotIn("Choose the GPU platform", "\n".join(screen.frames))
             mutate.assert_not_called()
@@ -428,14 +429,14 @@ class PricingTests(unittest.TestCase):
 
     def test_settings_default_is_reused_by_the_launch_picker_and_plan(self):
         saved = global_pricing.create_policy("my-saved-policy", "3.125")
-        application, screen = app(["2", "2", "\x1b", "\n"], 80, 30)
+        application, screen = app(["7", "2", "4", "\x1b", "\n"], 80, 30)
         with patch.object(application, "read", side_effect=self.ui_read):
             with self.assertRaises(ui.Back):
                 application.manage_spot_policies()
-            selection = application.choose_spot_pricing()
+            selection = application.choose_spot_pricing(OFFERING["platform"])
         self.assertEqual(selection["mode"], "default")
         self.assertIn("3.125/GPU-hour", screen.frames[-1])
-        self.assertEqual(global_pricing.list_policies()["default_policy_id"], saved["id"])
+        self.assertEqual(global_pricing.list_policies()["default_policy_ids"][OFFERING["platform"]], saved["id"])
         self.assertEqual(self.plan()["spot_pricing"]["policy"]["max_price"], "3.125")
         self.assertFalse(self.writes())
 
@@ -445,6 +446,18 @@ class PricingTests(unittest.TestCase):
             selection = application.choose_spot_pricing()
         self.assertEqual(selection["mode"], "default")
         mutate.assert_not_called()
+
+    def test_rtx_picker_shows_its_default_and_omits_caps_above_its_maximum(self):
+        saved = global_pricing.create_policy("Small custom cap", "1.200")
+        application, screen = app(["\n"], 80, 40)
+        with patch.object(application, "read", side_effect=self.ui_read):
+            selection = application.choose_spot_pricing("gpu-rtx6000-a")
+        self.assertEqual(selection["mode"], "default")
+        self.assertIn("RTX PRO 6000 default · USD 1.790/GPU-hour", screen.frames[-1])
+        self.assertIn(saved["name"], screen.frames[-1])
+        self.assertNotIn("B300 default", screen.frames[-1])
+        self.assertNotIn("H100 default", screen.frames[-1])
+        self.assertFalse(self.writes())
 
     def test_settings_creation_requires_review_and_needs_no_project_or_platform(self):
         for approved in (False, True):
@@ -496,7 +509,7 @@ class PricingTests(unittest.TestCase):
              patch.object(core, "sync_personal_projects", side_effect=AssertionError("No project required")), \
              patch.object(application, "mutate") as mutate, self.assertRaises(ui.Back):
             application.pricing_settings()
-        self.assertIn("Default cap", screen.frames[-1])
+        self.assertIn("Defaults by GPU", screen.frames[-1])
         mutate.assert_not_called()
 
 

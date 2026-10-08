@@ -15,9 +15,16 @@ import secrets
 
 import nebius_core as core
 
-DEFAULT_MAX_PRICE = "5.000"
 PRICING_URL = "https://docs.nebius.com/signup-billing/pricing-policy"
 CONSOLE_URL = "https://console.nebius.com/"
+
+
+def default_max_price(platform):
+    """Published PAYG GPU rate minus one cent; CPU, RAM and disks stay separate."""
+    payg = core.ON_DEMAND_GPU_USD.get(platform)
+    if payg is None:
+        raise core.NebiusError("No published PAYG rate is available for this GPU. Select a saved cap or Follow spot price")
+    return amount(format(Decimal(str(payg)) - Decimal("0.01"), ".3f"))
 
 
 def amount(value):
@@ -108,7 +115,8 @@ def list_policies(project_id, platform=""):
     saved = core._read_json(core.STATE_DIR / "pricing-preferences.json", {})
     preferred = saved.get(_preference_key(project_id, platform), "")
     return {"policies": sorted(rows, key=lambda p: (p["name"], p["id"])), "default_policy_id": preferred,
-            "default_max_price": DEFAULT_MAX_PRICE, "default_currency": "USD",
+            "default_max_price": default_max_price(platform) if platform in core.ON_DEMAND_GPU_USD else None,
+            "default_currency": "USD",
             "range_note": "Allowed ranges are shown in Nebius console: Billing → Pricing. Limits outside the range are rejected."}
 
 
@@ -165,7 +173,7 @@ def resolve(project_id, platform, mode="default", policy_id=""):
                 raise core.NebiusError("The default policy name is already in use. Select an existing policy or create a differently named one")
             else:
                 row = {"id": "", "name": default_name(platform), "project_id": project_id, "platform": platform,
-                       "max_price": DEFAULT_MAX_PRICE, "currency": "USD", "resource_version": "",
+                       "max_price": default_max_price(platform), "currency": "USD", "resource_version": "",
                        "state": "PLANNED", "scheduling_state": "PENDING_CREATION", "running_vm_count": 0}
     return {"mode": "policy", "policy": row, "create_default": not bool(row["id"])}
 
@@ -187,7 +195,7 @@ def check(pricing):
     if row["currency"] == "UNKNOWN":
         allowed = False
     message = ("Policy permits scheduling; capacity is checked separately" if allowed else
-               "Spot launch blocked by the price limit" if row["scheduling_state"] == "SCHEDULING_STATE_BLOCKED" else
+               "Preemptible launch blocked by the price limit" if row["scheduling_state"] == "SCHEDULING_STATE_BLOCKED" else
                "Policy is not ready or its currency is unknown; refresh or select another policy")
     return {"name": "Spot pricing", "state": "ok" if allowed else "blocked", "message": message}
 
@@ -304,7 +312,7 @@ def instance_pricing(instance):
         return {"mode": "policy", "policy_id": spec["spot_pricing_policy"]["id"]}
     if "follows_spot_price" in spec:
         return {"mode": "follow"}
-    return {"mode": "legacy", "note": "Choose a pricing policy before restarting this older Spot VM"}
+    return {"mode": "legacy", "note": "Choose a pricing policy before restarting this older preemptible VM"}
 
 
 def vm_details(vm_id):
@@ -363,7 +371,7 @@ def validate_start(instance, vm, review_id):
     except (KeyError, ValueError, TypeError):
         valid = False
     if not valid:
-        raise core.NebiusError("Spot start review expired or does not match this VM. Review again")
+        raise core.NebiusError("Spot pricing review expired or does not match this VM. Review again")
     choice = instance_pricing(instance)
     previous = saved["pricing"]
     if (choice["mode"] != previous["mode"] or
@@ -376,7 +384,7 @@ def plan_configuration(vm_id, mode="default", policy_id=""):
     instance, vm = core._accessible_vm(vm_id)
     core._require_direct_lifecycle(vm)
     if vm["state"] != "stopped" or not instance.get("spec", {}).get("preemptible"):
-        raise core.NebiusError("Pricing can only be changed on a stopped Spot VM")
+        raise core.NebiusError("Pricing can only be changed on a stopped preemptible VM")
     import nebius_global_pricing as global_pricing
     pricing = global_pricing.resolve(vm["project_id"], vm["platform"], mode, policy_id)
     review_id = secrets.token_urlsafe(18)
@@ -392,7 +400,7 @@ def configure_vm(vm_id, review_id):
         instance, vm = core._accessible_vm(vm_id)
         core._require_direct_lifecycle(vm)
         if vm["state"] != "stopped" or not instance.get("spec", {}).get("preemptible"):
-            raise core.NebiusError("Pricing can only be changed on a stopped Spot VM")
+            raise core.NebiusError("Pricing can only be changed on a stopped preemptible VM")
         if core._cloud_operation_path(vm_id).exists():
             raise core.NebiusError("Reconcile the pending VM operation in Activity before changing pricing")
         if not re.fullmatch(r"[A-Za-z0-9_-]{20,40}", review_id):

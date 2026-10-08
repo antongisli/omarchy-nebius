@@ -22,9 +22,9 @@ class GlobalPricingTests(unittest.TestCase):
     writes = fixture.PricingTests.writes
     plan = fixture.PricingTests.plan
 
-    def select(self, maximum="3.125"):
+    def select(self, maximum="3.125", platforms=None):
         saved = global_pricing.create_policy("Everywhere", maximum)
-        global_pricing.select_default(saved["id"])
+        global_pricing.select_default(saved["id"], platforms or [OFFERING["platform"]])
         return saved
 
     def materialize(self, project_id=None, platform=None):
@@ -39,6 +39,113 @@ class GlobalPricingTests(unittest.TestCase):
         spec.update({"spot_pricing_policy": {"id": policy_id}} if policy_id else {"follows_spot_price": {}})
         return {"metadata": {"id": vm["id"], "parent_id": vm["project_id"], "resource_version": "7"}, "spec": spec}, vm
 
+    def test_published_payg_defaults_cover_every_platform_and_region(self):
+        expected = {"gpu-b300-sxm": "9.490", "gpu-b200-sxm": "8.490", "gpu-b200-sxm-a": "8.490",
+                    "gpu-h200-sxm": "5.390", "gpu-h100-sxm": "4.490", "gpu-rtx6000": "1.790",
+                    "gpu-rtx6000-a": "1.790", "gpu-l40s-a": "1.340", "gpu-l40s-d": "1.340"}
+        self.projects.append({**PROJECT, "project_id": "project-second", "region": "eu-north1"})
+        policies = global_pricing.list_policies()
+        self.assertEqual(set(policies["default_policy_ids"]), set(expected))
+        self.assertEqual(len(policies["policies"]), 6)
+        self.assertEqual(policies["pricing_checked_at"], "2026-10-08")
+        for project in self.projects:
+            for platform, maximum in expected.items():
+                with self.subTest(project=project["project_id"], platform=platform):
+                    selected = global_pricing.resolve(project["project_id"], platform)
+                    self.assertEqual(selected["policy"]["max_price"], maximum)
+                    self.assertEqual(selected["global_policy"]["id"], policies["default_policy_ids"][platform])
+                    self.assertEqual(pricing.resolve(project["project_id"], platform)["policy"]["max_price"], maximum)
+        self.assertFalse((core.STATE_DIR / "global-pricing.json").exists())
+        self.assertFalse(self.writes())
+
+    def test_upgrade_replaces_flat_default_and_retains_custom_caps_and_existing_vms(self):
+        stock = {"id": "spotpolicy-default", "name": "Default cap", "max_price": "5.000",
+                 "currency": "USD", "resource_version": "1"}
+        custom = {**stock, "id": "spotpolicy-custom", "name": "My cap", "max_price": "1.250"}
+        self.resources = [fixture.resource("Existing VM cap", "5.000")]
+        before = copy.deepcopy(self.resources)
+        for default_id in ("", stock["id"], custom["id"]):
+            with self.subTest(previous_default=default_id):
+                path = core.STATE_DIR / "global-pricing.json"
+                legacy = {"schema": global_pricing.LEGACY_SCHEMA, "default_policy_id": default_id, "policies": [stock, custom]}
+                core._atomic_json(path, legacy)
+                self.assertEqual(self.plan()["spot_pricing"]["policy"]["max_price"], "5.390")
+                self.assertEqual(global_pricing.resolve(PROJECT["project_id"], "gpu-rtx6000")["policy"]["max_price"], "1.790")
+                policies = {row["id"]: row for row in global_pricing.list_policies()["policies"]}
+                self.assertNotIn(stock["id"], policies)
+                self.assertEqual(policies[custom["id"]]["max_price"], "1.250")
+                self.assertEqual(json.loads(path.read_text()), legacy, "Planning must not write migrated state")
+                global_pricing.select_default(custom["id"], [OFFERING["platform"]])
+                self.assertEqual(json.loads(path.read_text())["schema"], global_pricing.SCHEMA)
+                self.assertEqual(self.plan()["spot_pricing"]["policy"]["max_price"], "1.250")
+                self.assertEqual(len(global_pricing.list_policies()["policies"]), 7)
+        self.assertEqual(self.resources, before)
+        self.assertFalse(self.writes())
+
+    def test_upgrade_keeps_edited_old_default_as_an_explicit_custom_choice(self):
+        edited = {"id": "spotpolicy-default", "name": "My edited cap", "max_price": "1.100",
+                  "currency": "USD", "resource_version": "2"}
+        core._atomic_json(core.STATE_DIR / "global-pricing.json", {"schema": global_pricing.LEGACY_SCHEMA,
+                          "default_policy_id": edited["id"], "policies": [edited]})
+        self.assertEqual(self.plan()["spot_pricing"]["policy"]["max_price"], "5.390")
+        self.assertEqual(self.plan(spot_mode="policy", pricing_policy_id=edited["id"])["spot_pricing"]["policy"]["max_price"], "1.100")
+        self.assertFalse(self.writes())
+
+    def test_over_maximum_caps_block_before_cloud_calls_and_default_changes_are_atomic(self):
+        saved = global_pricing.create_policy("Too high for RTX", "5.000")
+        before = global_pricing.list_policies()["default_policy_ids"]
+        for platform in ("gpu-rtx6000", "gpu-rtx6000-a", "gpu-h100-sxm", "gpu-l40s-d"):
+            with self.subTest(platform=platform):
+                with self.assertRaisesRegex(core.NebiusError, "exceeds the published maximum"):
+                    global_pricing.resolve(PROJECT["project_id"], platform, "policy", saved["id"])
+                with self.assertRaisesRegex(core.NebiusError, "exceeds the published maximum"):
+                    global_pricing.select_default(saved["id"], [OFFERING["platform"], platform])
+        self.assertEqual(global_pricing.list_policies()["default_policy_ids"], before)
+        self.assertFalse(self.calls)
+
+    def test_gpu_default_change_covers_variants_but_does_not_change_other_gpus(self):
+        saved = global_pricing.create_policy("RTX budget", "1.200")
+        global_pricing.select_default(saved["id"], ["gpu-rtx6000", "gpu-rtx6000-a"])
+        for platform in ("gpu-rtx6000", "gpu-rtx6000-a"):
+            self.assertEqual(global_pricing.resolve(PROJECT["project_id"], platform)["policy"]["max_price"], "1.200")
+        self.assertEqual(self.plan()["spot_pricing"]["policy"]["max_price"], "5.390")
+        self.assertFalse(self.writes())
+
+    def test_edit_cannot_raise_a_gpu_default_above_its_maximum(self):
+        before = global_pricing.list_policies()
+        default_id = before["default_policy_ids"]["gpu-rtx6000"]
+        row = next(row for row in before["policies"] if row["id"] == default_id)
+        with self.assertRaisesRegex(core.NebiusError, "USD 1.790/GPU-hour"):
+            global_pricing.update_policy(default_id, row["name"], "5.000", row["resource_version"])
+        self.assertEqual(global_pricing.list_policies(), before)
+        self.assertFalse(self.calls)
+
+    def test_unknown_gpu_requires_an_explicit_cap_or_follow_price(self):
+        with self.assertRaisesRegex(core.NebiusError, "No default"):
+            global_pricing.resolve(PROJECT["project_id"], "gpu-unknown")
+        self.assertFalse(self.calls)
+        saved = global_pricing.create_policy("Explicit unknown GPU cap", "1.000")
+        selected = global_pricing.resolve(PROJECT["project_id"], "gpu-unknown", "policy", saved["id"])
+        self.assertEqual(selected["policy"]["max_price"], "1.000")
+        self.assertEqual(global_pricing.resolve(PROJECT["project_id"], "gpu-unknown", "follow")["mode"], "follow")
+        self.assertFalse(self.writes())
+
+    def test_multigpu_launch_materializes_the_gpu_cap_without_multiplying_it(self):
+        for platform, gpu_count, maximum in [("gpu-rtx6000", 1, "1.790"), ("gpu-rtx6000-a", 8, "1.790"),
+                                              ("gpu-h100-sxm", 8, "4.490")]:
+            with self.subTest(platform=platform, gpu_count=gpu_count):
+                offering = {**OFFERING, "platform": platform, "gpu_count": gpu_count,
+                            "preset": f"{gpu_count}gpu-128vcpu-1600gb"}
+                with patch.object(core, "gpu_capacity", return_value={"offerings": [offering]}):
+                    plan = self.plan()
+                self.assertEqual(plan["spot_pricing"]["policy"]["max_price"], maximum)
+                self.assertEqual(plan["gpu_count"], gpu_count)
+                selected = pricing.refresh_terms(plan["spot_pricing"], PROJECT["project_id"], platform, create=True)
+                self.assertEqual(selected["policy"]["max_price"], maximum)
+                payload = json.loads(self.writes()[-1][3])
+                self.assertEqual(payload["spec"]["pricing"]["max_price_v1"]["max_price"], maximum)
+                self.assertEqual(payload["spec"]["compute_instance_spec"]["v1"]["platform"], platform)
+
     def test_global_settings_create_edit_and_default_work_offline(self):
         with patch.object(core, "run_cli", side_effect=AssertionError("No cloud call allowed")), \
              patch.object(core, "sync_personal_projects", side_effect=AssertionError("No project needed")):
@@ -46,13 +153,13 @@ class GlobalPricingTests(unittest.TestCase):
             self.assertEqual(global_pricing.create_policy("Everywhere", "3.125"), saved)
             edited = global_pricing.update_policy(saved["id"], "All GPUs", "2.750", saved["resource_version"])
             self.assertEqual(edited["resource_version"], "2")
-            self.assertEqual(global_pricing.list_policies()["default_policy_id"], saved["id"])
+            self.assertEqual(global_pricing.list_policies()["default_policy_ids"][OFFERING["platform"]], saved["id"])
             self.assertNotIn("project_id", edited)
             self.assertNotIn("platform", edited)
         self.assertFalse(self.writes())
 
     def test_one_default_uses_exact_cap_across_regions_and_gpu_platforms(self):
-        saved = self.select()
+        saved = self.select("1.250", [OFFERING["platform"], "gpu-l40s-d"])
         other = {**PROJECT, "project_id": "project-second", "region": "eu-north1"}
         self.projects.append(other)
         placements = [(PROJECT["project_id"], OFFERING["platform"]),
@@ -62,7 +169,7 @@ class GlobalPricingTests(unittest.TestCase):
             with self.subTest(project=project_id, platform=platform):
                 selected = global_pricing.resolve(project_id, platform)
                 self.assertEqual(selected["global_policy"]["id"], saved["id"])
-                self.assertEqual(selected["policy"]["max_price"], "3.125")
+                self.assertEqual(selected["policy"]["max_price"], "1.250")
                 self.assertTrue(selected["create_default"])
                 before = len(self.writes())
                 resolved = pricing.refresh_terms(selected, project_id, platform, create=True)
@@ -172,11 +279,12 @@ class GlobalPricingTests(unittest.TestCase):
             global_pricing.resolve(PROJECT["project_id"], OFFERING["platform"])
         self.assertEqual(len(self.writes()), 1)
 
-    def test_local_corruption_or_deleted_default_never_resets_to_five(self):
+    def test_local_corruption_or_deleted_default_never_resets_the_cap(self):
         saved = self.select("1.000")
         path = core.STATE_DIR / "global-pricing.json"
         original = json.loads(path.read_text())
-        for value in (None, {}, {**original, "default_policy_id": None}, {**original, "default_policy_id": "spotpolicy-deleted"},
+        for value in (None, {}, {**original, "default_policy_ids": None}, {**original, "default_policy_ids": {}},
+                      {**original, "default_policy_ids": {**original["default_policy_ids"], OFFERING["platform"]: "spotpolicy-deleted"}},
                       {**original, "policies": [{**saved, "max_price": "NaN"}]}):
             with self.subTest(value=value):
                 core._atomic_json(path, value)
@@ -187,25 +295,20 @@ class GlobalPricingTests(unittest.TestCase):
             self.plan()
         self.assertFalse(self.writes())
 
-    def test_old_defaults_require_explicit_global_choice_and_can_be_imported(self):
+    def test_old_cloud_caps_can_be_imported_without_replacing_gpu_defaults(self):
         self.resources = [fixture.resource("My existing cap", "1.500")]
-        with self.assertRaisesRegex(core.NebiusError, "older default"):
-            self.plan()
+        self.assertEqual(self.plan()["spot_pricing"]["policy"]["max_price"], "5.390")
         imported = global_pricing.import_policy("pricingpolicy-example", "My global cap", "1")
-        with self.assertRaisesRegex(core.NebiusError, "older default"):
-            self.plan()
-        global_pricing.select_default(imported["id"])
+        self.assertEqual(self.plan()["spot_pricing"]["policy"]["max_price"], "5.390")
+        global_pricing.select_default(imported["id"], [OFFERING["platform"]])
         self.assertEqual(self.plan()["spot_pricing"]["policy"]["max_price"], "1.500")
         self.assertEqual(self.resources[0]["metadata"]["name"], "My existing cap")
         self.assertFalse(self.writes())
 
-    def test_deleted_legacy_preference_requires_choice_even_without_cloud_default(self):
+    def test_legacy_regional_preferences_do_not_override_gpu_defaults(self):
         core._atomic_json(core.STATE_DIR / "pricing-preferences.json",
                           {PROJECT["project_id"] + "/" + OFFERING["platform"]: "pricingpolicy-missing"})
-        with self.assertRaisesRegex(core.NebiusError, "older default"):
-            self.plan()
-        global_pricing.select_default(global_pricing.DEFAULT_ID)
-        self.assertEqual(self.plan()["spot_pricing"]["policy"]["max_price"], "5.000")
+        self.assertEqual(self.plan()["spot_pricing"]["policy"]["max_price"], "5.390")
 
     def test_import_deduplicates_identical_caps_and_rechecks_reviewed_terms(self):
         self.projects.append({**PROJECT, "project_id": "project-second", "region": "eu-north1"})
@@ -279,12 +382,26 @@ class GlobalPricingTests(unittest.TestCase):
         with patch.object(fixture.mcp.jobs, "submit", return_value={"job_id": "test"}) as submit:
             fixture.mcp._call("create_pricing_policy", {"name": "Agent cap", "max_price": "2.500"})
         self.assertEqual(submit.call_args.args[0], ["pricing-create", "--name", "Agent cap", "--max-price", "2.500"])
-        fixture.mcp._call("set_default_pricing_policy", {"policy_id": saved["id"]})
-        self.assertEqual(fixture.mcp._call("list_pricing_policies", {})["default_policy_id"], saved["id"])
+        fixture.mcp._call("set_default_pricing_policy", {"policy_id": saved["id"], "platforms": [OFFERING["platform"]]})
+        self.assertEqual(fixture.mcp._call("list_pricing_policies", {})["default_policy_ids"][OFFERING["platform"]], saved["id"])
         for tool in fixture.mcp.TOOLS:
             if tool["name"] in {"list_pricing_policies", "create_pricing_policy", "set_default_pricing_policy"}:
                 self.assertNotIn("project_id", tool["inputSchema"]["properties"])
                 self.assertNotIn("platform", tool["inputSchema"]["properties"])
+        self.assertFalse(self.writes())
+
+    def test_cli_gpu_default_assigns_variants_and_requires_explicit_platforms(self):
+        saved = global_pricing.create_policy("RTX cap", "1.200")
+        with patch.object(sys, "argv", ["nebius-core", "pricing-default", "--policy-id", saved["id"],
+                                       "--platform", "gpu-rtx6000", "--platform", "gpu-rtx6000-a"]), redirect_stdout(io.StringIO()):
+            self.assertEqual(core.main(), 0)
+        defaults = global_pricing.list_policies()["default_policy_ids"]
+        self.assertEqual(defaults["gpu-rtx6000"], saved["id"])
+        self.assertEqual(defaults["gpu-rtx6000-a"], saved["id"])
+        for platforms in ([], None, "gpu-rtx6000", ["bad-platform"]):
+            with self.subTest(platforms=platforms), self.assertRaisesRegex(core.NebiusError, "Choose the GPU"):
+                global_pricing.select_default(saved["id"], platforms)
+        self.assertEqual(global_pricing.list_policies()["default_policy_ids"], defaults)
         self.assertFalse(self.writes())
 
 

@@ -22,7 +22,8 @@ printf 'Launch log      %s\n' "$STATE_DIR/create.log"
 
 printf '\n  VM defaults\n\n'
 printf 'Shape           1 GPU, selected from current capacity\n'
-printf 'Allocation      Spot, USD 5.000/GPU-hour default cap; P changes allocation\n'
+printf 'Allocation      Preemptible; P changes allocation\n'
+printf 'Spot pricing    Default by GPU: published PAYG minus USD 0.01/GPU-hour\n'
 printf 'Runtime         until you stop the VM manually\n'
 printf 'Deletion        explicit confirmation only; never automatic\n'
 

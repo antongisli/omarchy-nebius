@@ -81,7 +81,7 @@ telemetry requests. Nebius can distinguish plugin requests if its API logs
 retain the User-Agent; this plugin does not provide a usage analytics dashboard.
 
 After updating an existing installation, choose **Set up / reconnect** once to
-install CLI `0.12.287`, then reopen plugin terminals and agent sessions. Older CLIs may lack pricing-policy commands. Spot actions require the updated CLI; setup preserves the existing profile and SSH key.
+install CLI `0.12.287`, then reopen plugin terminals and agent sessions. Older CLIs may lack pricing-policy commands. Spot pricing actions require the updated CLI; setup preserves the existing profile and SSH key.
 Setup preserves older binaries and their ownership records. Choosing to remove
 the CLI during uninstall also removes recorded previous versions, only at known
 installation paths and only when their checksums still match.
@@ -125,7 +125,7 @@ memory and CPU architecture. Availability shows the best reported pool, not a
 sum across potentially overlapping capacity advice. Actual platform, preset and
 fabric IDs are retained for placement, live preflight, pricing and API requests.
 After project/image selection, the plugin picks a matching variant by capacity,
-then the available price estimate on ties. Spot placement never uses a fixed
+then the available price estimate on ties. Spot price estimates never use a fixed
 discount. Global caps work across equivalent platform variants. Known
 project-level preemptible restrictions are respected. A failure after submission
 never triggers a second automatic launch.
@@ -136,9 +136,9 @@ never triggers a second automatic launch.
 - Opens from the last successful capacity snapshot immediately; `R` requests a live refresh and falls back visibly if Nebius times out.
 - Lets the user choose the GPU type and region first, then uses only projects created by that user (plus the preferred profile project and plugin-created projects).
 - If that region has no personal project, proposes the editable name `gpu-<region>`, with Nebius's default network and subnet, before a normal confirmation. A project can hold any Nebius resources.
-- New launches default to Spot (preemptible) with a reusable USD 5.000/GPU-hour policy. Press `P` to toggle on-demand/Spot. Edit the proposed VM name in VM settings.
+- New launches default to preemptible VMs with Spot pricing and the matching GPU default cap. Initial caps use the published PAYG GPU rate minus USD 0.01/GPU-hour. Press `P` to toggle on-demand/preemptible. Edit the proposed VM name in VM settings.
 - Checks regional SSD quota before project creation. VM review and confirmed creation both run live, read-only preflight: project-specific platform/preemptible eligibility, GPU preset/count, capacity advice, READY subnet, boot-image readiness/size, name conflicts, SSD quota and regular PAYG GPU quota. Critical unavailable checks block VM allocation. CLI JSON validation still runs before allocating a disk.
-- Preflight is not a reservation, a complete CPU/network quota audit, or proof of create permissions. Unreported capacity is disclosed. Regular PAYG GPU quotas are not applied to preemptibles. New-project placement cannot verify project-specific eligibility until the project exists; that project remains if later VM checks fail.
+- Preflight is not a reservation, a complete CPU/network quota audit, or proof of create permissions. Unreported capacity is disclosed. Regular PAYG GPU quotas are not applied to preemptible VMs. New-project placement cannot verify project-specific eligibility until the project exists; that project remains if later VM checks fail.
 - Shows the exact configuration, allocation, selected boot disk size, price estimate and manual-stop reminder before creation. The boot disk defaults to 200 GiB and grows to fit the selected image. Small terminals page through all billing terms before confirmation is enabled. Escape returns to editing.
 - Defaults to Ubuntu 24.04 with CUDA 13.0; **Boot image** offers public and custom images. New VMs use the plugin's dedicated SSH key.
 - Auto-stop was removed in v0.5.4. No timer is installed on create, start or recovery. Stop VMs manually when finished. Old plans that promised auto-stop must be reviewed again; obsolete automatic-stop invocations are harmless no-ops.
@@ -147,7 +147,7 @@ never triggers a second automatic launch.
 - Shows stage and elapsed time in a persistent terminal. `Esc` or `B` returns to the overview; a detached worker continues even if the terminal closes. `A` follows progress and shows the result.
 - Shows existing VMs in personal projects. External VMs use your SSH keys/agent and may need a login username; a private-only address needs a network route or VPN. Cloud visibility does not guarantee SSH access.
 - Keeps uncertain creates as **Launch unconfirmed** requests, separately below actual VMs, not as VM health states. Recheck to restore the exact request-labelled VM's management and SSH access. Recovery does not schedule a stop.
-- CLI JSON rejections and the specifically recognized server preemptible-eligibility rejection are different from timeouts. **Check for a rejected request** verifies the recorded failure and live disk ownership/attachments, clears only that false recovery block, and preserves the disk as **Boot disk available**. The next compatible launch in that project reviews and reuses the disk; no extra SSD quota or second boot disk is needed. Other remote errors remain uncertain.
+- CLI JSON rejections and the specifically recognized server preemptible eligibility rejection are different from timeouts. **Check for a rejected request** verifies the recorded failure and live disk ownership/attachments, clears only that false recovery block, and preserves the disk as **Boot disk available**. The next compatible launch in that project reviews and reuses the disk; no extra SSD quota or second boot disk is needed. Other remote errors remain uncertain.
 - If recovery remains uncertain, inspect the project in the Nebius console. Archiving requires explicit confirmation and only removes the local duplicate-launch guard; it does not clean up any billable resources.
 - Failed boot-disk deletion stays visible as **disk remains**, with a cleanup retry action. VM deletion is limited to visible personal projects and verified creator ownership—not plugin registration. Missing or inaccessible creation audit history blocks deletion; use the Nebius console to resolve it.
 - Select a saved boot disk to reuse, inspect, or permanently delete it. Cleanup requires explicit confirmation and live checks for ownership, attachments (including stopped VMs), locks, readiness and deletion protection. Nothing is deleted automatically.
@@ -158,35 +158,58 @@ never triggers a second automatic launch.
 
 Stopped VMs stop incurring compute charges, but their disks remain billable until deleted.
 
-Spot estimates use the public Nebius billing calculator. On-demand estimates use [published Nebius pricing](https://docs.nebius.com/compute/resources/pricing). Estimates exclude traffic and taxes and are not quotes. Quotas and eligibility can change; preflight reads them again for each confirmed launch. Nebius identifies supported preemptible platforms through [`allowed_for_preemptibles`](https://docs.nebius.com/compute/virtual-machines/preemptible), not through regional capacity counts.
+Spot price estimates use the public Nebius billing calculator. On-demand estimates use [published Nebius pricing](https://docs.nebius.com/compute/resources/pricing). Estimates exclude traffic and taxes and are not quotes. Quotas and eligibility can change; preflight reads them again for each confirmed launch. Nebius identifies supported preemptible platforms through [`allowed_for_preemptibles`](https://docs.nebius.com/compute/virtual-machines/preemptible), not through regional capacity counts.
 
 ## Spot pricing and reusable policies
 
-New launch flows start with **Spot (preemptible)** and an initial
-**USD 5.000 per GPU-hour** cap. The plugin's named policies and default are
-global: the same cap works with any GPU type, in every region and personal
-project. Policies are saved locally in this plugin installation.
+New launch flows start with **Preemptible** allocation and **Spot pricing**.
+The plugin automatically selects the default for the launch's exact GPU
+platform. Defaults apply across all regions and personal projects.
+
+Initial caps use the [published PAYG GPU rates](https://docs.nebius.com/compute/resources/pricing)
+checked on **2026-10-08**, minus **USD 0.01 per GPU-hour**:
+
+| GPU | PAYG USD/GPU-hour | Initial cap USD/GPU-hour |
+| --- | ---: | ---: |
+| RTX PRO 6000 | 1.80 | 1.79 |
+| L40S | 1.35 | 1.34 |
+| H100 | 4.50 | 4.49 |
+| H200 | 5.40 | 5.39 |
+| B200 | 8.50 | 8.49 |
+| B300 | 9.50 | 9.49 |
+
+Equivalent variants share a GPU default. L40S rates here cover the GPU only;
+CPU and RAM are billed separately. These are published-rate snapshots shipped
+with the plugin, not a live PAYG feed. Unknown platforms require an explicit
+cap or **Follow spot price**. The service still validates the allowed range.
+Policies and default assignments are saved locally in this plugin installation.
+
+Upgrading replaces the old single default assignment with these GPU defaults
+for future launches. Edited and custom caps remain available for explicit
+selection; the untouched built-in USD 5 cap is retired. Existing VMs retain
+their actual cloud policy and cap, including on restart. Review a new launch
+plan to see its selected cap before creating a VM.
 
 Open **Settings → Spot pricing policies** to manage the caps directly. There
-is no project, region or GPU platform picker. Settings works without a project,
+is no project or region picker. Settings works without a project,
 existing VM, available GPU capacity or cloud connection.
 
 - **Create a policy** saves a name and USD per-GPU-hour limit locally.
 - Select a saved policy to **Edit policy**, **Set as default**, or view its details.
-  The default applies to future Spot launches across all GPUs and regions.
+  **Set as default** asks which GPU should use the cap in every region.
 - **Import an existing cap** copies the reviewed limit of an existing USD cloud
   policy into a global policy. It needs cloud access. Choose **Set as default**
-  afterward to use it automatically. Older defaults require this explicit
-  choice before a default launch; the plugin never silently replaces them.
+  afterward to assign it to a GPU. Importing a cap does not change defaults.
 - Browsing, saving and editing global policies creates no cloud resources.
 
 In **VM settings → Spot pricing**, select a saved policy for this launch:
 
-- **Use saved default** uses the same saved global cap everywhere.
+- **Use GPU default** picks the matching platform's cap automatically.
 - **Follow spot price** explicitly accepts changing prices without a user-set
   maximum. This is never an automatic fallback.
 - **Manage policies in Settings** opens the global list, then returns to the
-  picker with the updated policies. Changing placement keeps your selected cap.
+  picker with the updated policies. Explicitly selected caps stay selected
+  across placement changes; the default choice follows the selected GPU.
 
 Nebius cloud policies still belong to a project and exact GPU platform. On a
 confirmed launch the plugin creates or reuses the matching cloud policy with
@@ -196,8 +219,9 @@ VMs. Retries reconcile matching copies; uncertain writes are not replayed
 automatically. Global policy names and defaults are local and do not sync
 between installations.
 
-The service rejects limits outside its allowed range for the selected GPU and
-location. The plugin keeps your requested cap exactly: if rejected, it asks for
+Caps above the published PAYG-minus-one-cent maximum are rejected locally for
+known platforms. The service also checks its allowed range for the selected GPU
+and location. The plugin keeps your requested cap exactly: if rejected, it asks for
 an allowed value without allocating a disk or VM. Check **Billing → Pricing**
 in the Nebius console, then select a suitable cap or another configuration.
 One global cap does not imply equal market prices or availability everywhere.
@@ -210,7 +234,7 @@ calculator estimate` API; CPU/RAM are included in its compute estimate. L40S
 totals are not presented as a GPU-only spot price. Estimates have a fetch time;
 failed refreshes show a saved/stale estimate or explicitly unavailable pricing.
 The API does not expose a standalone spot-price range feed, so the plugin links
-to the console instead of inferring a range or using a fixed preemptible discount.
+to the console instead of inferring a range or using a fixed discount.
 
 Global cap edits apply to future launches and selections. Existing VMs keep
 their reviewed cap, including after a restart. To apply an edited cap to an
@@ -221,25 +245,29 @@ when a VM or the plugin is removed; removing local plugin state removes the
 saved global caps and default.
 
 **VM actions → Spot pricing** shows the current policy and eligibility. On a
-stopped Spot VM it also offers a reviewed change of policy or pricing mode.
+stopped preemptible VM it also offers a reviewed change of policy or pricing mode.
 **Start** reviews current pricing and checks it again immediately before
 submission. A blocked, changed, missing or unreadable policy prevents starting;
-old Spot VMs without an explicit choice must select one first. Changing pricing
+old preemptible VMs without an explicit choice must select one first. Changing pricing
 never starts a VM. Existing on-demand VMs retain their allocation.
 
 The plugin uses the service's policy scheduling state, separately from Capacity
 Advisor. It does not infer why a VM stopped merely from a currently blocked
-policy. Spot VMs may stop for capacity pressure or a price above the limit;
+policy. Preemptible VMs may stop for capacity pressure or a price above the limit;
 attached network disks persist and remain billable. No restart loop or automatic
 cap increase is installed.
 
 Agent tools expose the same workflow: `list_pricing_policies`,
 `create_pricing_policy`, `update_pricing_policy`, `set_default_pricing_policy`,
 `inspect_vm_pricing`, `review_vm_start`, `plan_vm_pricing`, and `apply_vm_pricing`.
-Global policy tools need no project, region or platform. Use
+Global policy tools need no project or region. `list_pricing_policies` returns
+`platform_defaults`; `set_default_pricing_policy` takes a policy ID and a
+`platforms` array. The CLI uses `pricing-default --policy-id ID --platform PLATFORM`
+with repeated `--platform` flags for variants. Creating and editing caps need
+no platform argument. Use
 `list_existing_pricing_policies` and `import_pricing_policy` to reuse older caps.
 `plan_gpu_vm` accepts `spot_mode` (`default`, `policy`, `follow`) and
-`pricing_policy_id`. A Spot start requires the `pricing_review_id` returned by
+`pricing_policy_id`. Starting a preemptible VM requires the `pricing_review_id` returned by
 `review_vm_start`. Old launch plans without pricing terms require fresh review.
 
 See [spot pricing](https://docs.nebius.com/signup-billing/pricing-policy),
@@ -273,7 +301,7 @@ Omarchy's Super+Ctrl+1–9 shortcuts address panels in the **right-hand** bar se
 Use arrows or `j/k`, Enter, Escape/back, and `/` search throughout the terminal. Menus separate section headings, bold choices, and indented descriptions, with a full-width selection highlight and space between choices. `Home` / `End` select the first / last item; Page Up / Page Down scroll by a page. Press `?` for the selected item's complete text and all keyboard shortcuts. Long resource details wrap; review and JSON details preserve indentation. From the manager or N panel:
 
 - `C` — view current GPU capacity.
-- `P` — SSH port forwarding in the launcher, manager or VM list. In capacity, configuration and VM settings, it toggles the highlighted **On-demand / Spot** switch instead. Capacity views update immediately from the same snapshot; use `R` for fresh data.
+- `P` — SSH port forwarding in the launcher, manager or VM list. In capacity, configuration and VM settings, it toggles the highlighted **On-demand / Preemptible** switch instead. Capacity views update immediately from the same snapshot; use `R` for fresh data.
 - `G` — choose a GPU family, select its region/configuration, choose project placement, review, and confirm creation.
 - `V` — list VMs, connect, start/stop; review deletion of VMs you created in visible personal projects.
 - In **Your VMs**, `C` connects directly to the highlighted running VM and Enter opens its actions. Deletion has one review: Enter pages through the exact resources/data-loss warning, `D` confirms only after all terms are visible, and Esc cancels. Secondary disks are kept.

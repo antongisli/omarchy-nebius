@@ -20,6 +20,7 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "libexec"))
 import nebius_ui as ui
+import nebius_global_pricing as global_pricing
 
 
 class FrameReady(Exception):
@@ -85,20 +86,20 @@ def render(width=80, height=30, allocation="on_demand", surface="capacity"):
                      patch.object(app, "agent_status", return_value={"installed": False, "ready": False}):
                     app.preferences()
             elif surface in {"spot-pricing", "spot-policies", "spot-review"}:
-                policy = {"id": "spotpolicy-example", "name": "Development GPUs",
-                          "max_price": "5.000", "currency": "USD", "resource_version": "1"}
+                defaults = global_pricing._initial()
+                policy = next(row for row in defaults["policies"] if row["name"] == "H200 default")
                 if surface in {"spot-pricing", "spot-policies"}:
-                    with patch.object(app, "read", return_value={"policies": [policy], "default_policy_id": policy["id"],
-                            "range_note": "Your cap is checked at launch. Storage and other charges are separate."}):
+                    with patch.object(global_pricing, "_load", return_value=defaults), \
+                         patch.object(app, "read", return_value=global_pricing.list_policies()):
                         if surface == "spot-policies":
                             app.manage_spot_policies()
                         else:
-                            app.choose_spot_pricing()
+                            app.choose_spot_pricing("gpu-h200-sxm")
                 else:
                     quote = {"state": "current", "compute_per_hour": "20.000", "storage_per_hour": "0.020",
                              "per_gpu_hour": "2.500", "checked_at": "2026-01-01T12:00:00+00:00"}
                     app.confirm_launch(ui.pricing.review_lines({"mode": "policy", "policy": policy}, quote, 8),
-                                       "Synthetic pricing preview", title="Review Spot launch")
+                                       "Synthetic pricing preview", title="Review preemptible launch")
             elif surface in {"shortcut-form", "shortcut-error"}:
                 app.shortcut_form("SUPER + CTRL + 1" if surface == "shortcut-error" else None,
                                   error="Super+Ctrl+1 is already used by Bar panel 1. Choose another key; nothing was changed."

@@ -2,15 +2,20 @@
 
 ## Unreleased
 
-- Spot launches default to a reusable USD 5.000/GPU-hour policy per project and
-  GPU platform. Manage policies and defaults in Settings → Spot pricing policies;
-  VM launch settings select from those saved policies.
+- Preemptible launches select a GPU default cap automatically across all regions.
+  Initial caps use published PAYG GPU rates minus USD 0.01 per GPU-hour, checked
+  on 2026-10-08. This replaces the flat USD 5 default; saved custom caps remain
+  available and existing VMs keep their cap.
+- Settings → Spot pricing policies manages global caps and defaults by GPU.
+  The plugin creates the matching project/platform cloud policy only on a
+  confirmed launch. The interface uses Preemptible for allocation and Spot for pricing.
 - Live calculator estimates replace fixed preemptible prices. Price limits and
   storage costs are shown separately; stale or unavailable estimates are explicit.
 - Launch and start recheck policy terms and scheduling eligibility. Limits outside
   the platform range require a user-chosen value; they are never silently adjusted.
-- Stopped Spot VMs can switch policies after review. Shared policy limits can be
-  edited only when no associated VMs are running. UI and agent tools share these rules.
+- Stopped preemptible VMs can switch policies after review. Editing a saved cap
+  creates a new revision for future selections and leaves existing cloud copies
+  unchanged. UI and agent tools share these rules.
 
 - Setup pins checksum-verified Nebius CLI `0.12.287` for pricing-policy support.
   Existing installations should run **Set up / reconnect** once after updating.

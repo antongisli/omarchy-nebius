@@ -50,8 +50,14 @@ Those three checks skip elsewhere. A successful unit-test run is not a live prov
 
 ## Contributing
 
+Use **Preemptible** and **On-demand** for allocation types. Use **Spot** for the
+pricing mechanism, including **Spot pricing policies** and **Follow spot price**.
+The allocation values in API requests, saved state and CLI flags remain
+`preemptible` and `on_demand`. Preserve raw service wording in diagnostic details.
+
 Pricing tests use public API-shaped synthetic policies and calculator responses.
-They cover global defaults across regions and GPU platforms, cloud-copy reuse,
+They cover PAYG-minus-one-cent GPU defaults across regions, migration of the old
+flat default, explicit custom caps, maximum checks, cloud-copy reuse,
 legacy import, unchanged existing VM caps, scope, eligibility, stale pricing and
 review/submission races. Optional real CLI parser tests use an
 isolated profile, synthetic token and a reserved `.invalid` endpoint:
