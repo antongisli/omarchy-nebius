@@ -195,8 +195,7 @@ def _verify_copy(row, saved):
     if not pricing.matches_policy_identity(row, _cloud_name(saved, row["platform"]), _labels(saved)):
         raise core.NebiusError("The cloud policy's identifying labels conflict with your saved cap. "
                               "Review it in Nebius console or select another policy")
-    if row["max_price"] != saved["max_price"] or row["currency"] != saved["currency"]:
-        raise core.NebiusError("The cloud policy differs from your saved cap. Review it in Nebius console or select another policy")
+    pricing.verify_cap(row, saved["max_price"], saved["currency"])
 
 
 def resolve(project_id, platform, mode="default", policy_id=""):

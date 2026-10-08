@@ -318,10 +318,22 @@ class GlobalPricingTests(unittest.TestCase):
                         return {"items": [listed]}
                     return response
                 with patch.object(core, "run_cli", side_effect=stale_list):
-                    with self.assertRaises(core.NebiusError):
+                    with self.assertRaises(core.NebiusError) as resolved_error:
                         global_pricing.resolve(PROJECT["project_id"], OFFERING["platform"])
-                    with self.assertRaises(core.NebiusError):
+                    with self.assertRaises(core.NebiusError) as created_error:
                         pricing.refresh_terms(reviewed, PROJECT["project_id"], OFFERING["platform"], create=True)
+                for error in (resolved_error.exception, created_error.exception):
+                    message = str(error)
+                    if field in {"price", "currency", "unknown_currency"}:
+                        self.assertIn("USD 3.125/GPU-hour", message)
+                    if field == "price":
+                        self.assertIn("cloud: USD 3.126/GPU-hour", message)
+                    elif field == "currency":
+                        self.assertIn("cloud: EUR 3.125/GPU-hour", message)
+                    elif field == "unknown_currency":
+                        self.assertIn("did not report", message)
+                        self.assertIn("cloud amount: 3.125/GPU-hour", message)
+                        self.assertNotIn("differs", message)
                 self.assertEqual(self.resources, before)
         self.assertEqual(len(self.writes()), 1)
 

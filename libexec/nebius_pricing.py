@@ -90,6 +90,19 @@ def matches_policy_identity(row, name, labels):
             (row["name"] == name or all(actual.get(key) == value for key, value in expected.items())))
 
 
+def verify_cap(row, maximum, currency="USD"):
+    if row["max_price"] == maximum and row["currency"] == currency:
+        return
+    expected = f"{currency} {maximum}/GPU-hour"
+    if row["currency"] == "UNKNOWN":
+        raise core.NebiusError("Nebius did not report the pricing policy's currency. "
+                              f"Expected cap: {expected}; cloud amount: {row['max_price']}/GPU-hour. "
+                              "Refresh pricing or check the policy in Nebius console")
+    raise core.NebiusError("The cloud policy differs from your saved cap. "
+                          f"Expected: {expected}; cloud: {row['currency']} {row['max_price']}/GPU-hour. "
+                          "Review it in Nebius console or select another policy")
+
+
 def get_policy(policy_id, project_id=None, platform=None):
     require_support()
     if not re.fullmatch(r"pricingpolicy-[A-Za-z0-9_-]+", str(policy_id)):
@@ -242,8 +255,8 @@ def create_policy(project_id, platform, name, max_price, *, default=False, label
         found = (_managed_default(existing) if default else None) or next((p for p in existing if p["name"] == name), None)
         if found:
             found = get_policy(found["id"], project_id, platform)
-            if (found["max_price"] != maximum or found["currency"] != "USD" or
-                    (labels and not matches_policy_identity(found, name, labels)) or
+            verify_cap(found, maximum)
+            if ((labels and not matches_policy_identity(found, name, labels)) or
                     (default and (found["labels"].get("pricing-default") != "true" or
                                   found["labels"].get("managed-by") != core.MANAGED_BY))):
                 raise core.NebiusError("That policy already exists with different terms. Review and select it instead")
@@ -261,9 +274,9 @@ def create_policy(project_id, platform, name, max_price, *, default=False, label
             raise _policy_error(error)
         row = policy_row(core.run_cli(["billing", "pricing-policy", "get-by-name", "--parent-id", project_id,
                                       "--name", name, "--format", "json"]))
-        if (row["project_id"] != project_id or row["platform"] != platform or
-                row["max_price"] != maximum or row["currency"] != "USD"):
-            raise core.NebiusError("Created policy terms differ from the reviewed USD limit. Review the policy before launching")
+        if row["project_id"] != project_id or row["platform"] != platform:
+            raise core.NebiusError("Created policy belongs to a different project or GPU platform. Review the policy before launching")
+        verify_cap(row, maximum)
         return row
 
 

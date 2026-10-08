@@ -209,6 +209,32 @@ class PricingTests(unittest.TestCase):
         self.assertIn("Review the current settings and pricing", explanation["recovery"])
         self.assertNotIn("reconnect", explanation["recovery"])
 
+    def test_created_policy_mismatch_reports_values_before_allocating_compute(self):
+        for maximum, currency in (("5.391", "USD"), ("5.390", "EUR"), ("5.390", "")):
+            with self.subTest(maximum=maximum, currency=currency):
+                self.resources = []
+                self.calls = []
+                plan = self.plan()
+                def different_terms(args, **kwargs):
+                    response = self.cli(args, **kwargs)
+                    if args[:3] == ["billing", "pricing-policy", "create"]:
+                        self.resources[-1]["spec"]["pricing"]["max_price_v1"]["max_price"] = maximum
+                        self.resources[-1]["status"]["currency"] = currency
+                    return response
+                with patch.object(core, "run_cli", side_effect=different_terms), \
+                     patch.object(core, "ensure_ssh_key"), patch.object(core, "_cloud_init", return_value=""), \
+                     patch.object(core, "validate_instance_request", return_value={"valid": True}), \
+                     patch.object(core, "_ssh_security_group") as security:
+                    with self.assertRaises(core.NebiusError) as error:
+                        core.create_gpu_vm(plan["plan_id"])
+                    security.assert_not_called()
+                self.assertIn("USD 5.390/GPU-hour", str(error.exception))
+                self.assertIn(maximum + "/GPU-hour", str(error.exception))
+                self.assertIn(currency if currency else "did not report", str(error.exception))
+                self.assertEqual(len(self.writes()), 1)
+                self.assertEqual(self.writes()[0][:3], ["billing", "pricing-policy", "create"])
+                self.assertFalse(core._pending_launches())
+
     def test_unknown_create_result_is_not_replayed(self):
         self.create_error = "DeadlineExceeded"
         with self.assertRaises(core.NebiusError):
