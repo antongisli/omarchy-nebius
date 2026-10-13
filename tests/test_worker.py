@@ -70,6 +70,14 @@ class WorkerTests(unittest.TestCase):
         self.assertIn("SSD storage", operation["message"])
         self.assertFalse(any("create" in command for command in calls))
 
+    def test_project_collision_preserves_explanation_and_suggestion_for_ui(self):
+        result, job, operation, calls, state = self.run_worker("project-collision")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("unique across all regions in a tenant", operation["message"])
+        self.assertIn("Try 'my-training-eu-west1' for eu-west1", operation["recovery"])
+        self.assertEqual(job["operation"], operation)
+        self.assertFalse(any("create" in command for command in calls))
+
     def test_network_failure_reports_project_as_created(self):
         result, job, operation, calls, state = self.run_worker("network-error")
         self.assertEqual(result.returncode, 1, result.stderr)

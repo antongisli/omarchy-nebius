@@ -724,7 +724,7 @@ class App:
                 return choice
             try:
                 name = self.edit("Project name", "gpu-" + offering["region"], validate=core._safe_name,
-                                 notes=["This project can hold any Nebius resources.", "A default network is included. The project remains if you cancel the VM later."])
+                                 notes=["Names must be unique across all regions in your tenant.", "This project can hold any Nebius resources.", "A default network is included. The project remains if you cancel the VM later."])
                 approved = self.menu("Create project", [("Create " + name, offering["region"], True), ("Back to project selection", "No changes", False)],
                                      subtitle="Review project", notes=[f"Name: {name}", f"Region: {offering['region']}"])
                 if not approved:

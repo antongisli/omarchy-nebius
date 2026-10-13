@@ -26,7 +26,8 @@ elif "quota-allowance" in args:
 elif "whoami" in args:
     emit({"user_profile": {"tenants": [{"tenant_id": "tenant-test", "tenant_user_account_id": "tenantuseraccount-test"}]}})
 elif "project" in args and "list" in args:
-    emit({"items": []})
+    emit({"items": [{"metadata": {"name": "my-training"}, "spec": {"region": "eu-north1"}}]
+          if scenario == "project-collision" else []})
 elif "project" in args and "create" in args:
     emit({"metadata": {"id": "project-created", "name": args[args.index("--name") + 1]}})
 elif "subnet" in args:

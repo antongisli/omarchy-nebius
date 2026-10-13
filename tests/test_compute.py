@@ -209,10 +209,33 @@ class ComputeTests(unittest.TestCase):
         with patch.object(core, "gpu_capacity", return_value={"offerings": [OFFERING]}), \
              patch.object(core, "preflight_vm", return_value=GOOD), \
              patch.object(core, "_tenant_user_id", return_value="tenantuseraccount-test"), \
-             patch.object(core, "run_cli", return_value={"items": [{"metadata": {"name": "my-project"}}]}) as cli:
-            with self.assertRaisesRegex(core.NebiusError, "already exists"):
+             patch.object(core, "run_cli", return_value={"items": [{"metadata": {"name": "my-project"}, "spec": {"region": "eu-north1"}}]}) as cli:
+            with self.assertRaisesRegex(core.NebiusError, "already exists") as caught:
                 core.create_nebius_project("eu-west1", name="my-project", confirmed=True)
             self.assertEqual(cli.call_count, 1)
+        explanation = core.explain_error("Nebius: " + str(caught.exception))
+        self.assertIn("unique across all regions in a tenant", explanation["message"])
+        self.assertIn("Try 'my-project-eu-west1' for eu-west1", explanation["recovery"])
+
+    def test_project_collision_suggestion_is_valid_and_not_already_taken(self):
+        for name, taken, expected in [
+            ("my-project", ["my-project-eu-west1"], "my-project-eu-west1-2"),
+            ("my-project-eu-west1", [], "my-project-eu-west1-2"),
+            ("a" * 50, [], "a" * 41 + "-eu-west1"),
+            ("a" * 40 + "-" + "b" * 9, [], "a" * 40 + "-eu-west1"),
+        ]:
+            with self.subTest(name=name), \
+                 patch.object(core, "gpu_capacity", return_value={"offerings": [OFFERING]}), \
+                 patch.object(core, "preflight_vm", return_value=GOOD), \
+                 patch.object(core, "_tenant_user_id", return_value="tenantuseraccount-test"), \
+                 patch.object(core, "run_cli", return_value={"items": [
+                     {"metadata": {"name": value}} for value in [name, *taken]
+                 ]}) as cli:
+                with self.assertRaises(core.NebiusError) as caught:
+                    core.create_nebius_project("eu-west1", name=name, confirmed=True)
+                self.assertIn(f"Try '{expected}'", str(caught.exception))
+                self.assertEqual(core._safe_name(expected), expected)
+                self.assertEqual(cli.call_count, 1)
 
     def test_project_is_recorded_before_network_failure(self):
         def cli(args, **kwargs):
