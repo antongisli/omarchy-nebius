@@ -176,6 +176,9 @@ def explain_error(error: str) -> dict[str, str]:
     elif "timed out" in lower or "deadlineexceeded" in lower:
         message = "Nebius did not finish responding in time."
         recovery = "Refresh the overview before retrying a create action; the cloud request may still finish."
+    elif "project names must be unique across all regions in a tenant" in lower:
+        message, _, recovery = error.removeprefix("Nebius: ").partition("\n")
+        recovery = recovery.strip() or "Choose a different project name for the selected region."
     elif "alreadyexists" in lower or "already exists" in lower:
         message = "That name is already in use."
         recovery = "Edit the name or choose the existing project."
@@ -945,7 +948,19 @@ def create_nebius_project(
     )
     existing_names = {str(item.get("metadata", {}).get("name") or "") for item in _items(existing)}
     if project_name in existing_names:
-        raise NebiusError(f"Project '{project_name}' already exists. Choose that project or edit the name.")
+        base = project_name.removesuffix(f"-{region}") or project_name
+        number = 1
+        while True:
+            suffix = f"-{region}" + (f"-{number}" if number > 1 else "")
+            suggestion = base[:50 - len(suffix)].rstrip("-") + suffix
+            if suggestion not in existing_names:
+                break
+            number += 1
+        raise NebiusError(
+            f"Project '{project_name}' already exists in this tenant. "
+            "Project names must be unique across all regions in a tenant.\n"
+            f"Try '{suggestion}' for {region}, or enter another project name."
+        )
 
     preview["project_name"] = project_name
     _write_operation("running", "project", f"Creating {project_name} in {region}", **preview)
